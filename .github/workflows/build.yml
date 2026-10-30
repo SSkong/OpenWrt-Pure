@@ -276,8 +276,11 @@ jobs:
           cd "$out"
           ls -lh
           [ -n "$(ls -A)" ] || { echo "ERROR: 未找到任何固件产物" >&2; exit 1; }
-          # 校验和必须和设备产物放在同一目录，才能被 upload-artifact 一起带走
-          sha256sum $(ls -1 | grep -v '^sha256sums.txt$') > sha256sums.txt
+          # 校验和必须和设备产物放在同一目录，才能被 upload-artifact 一起带走。
+          # 文件名带设备名：publish job 会把三个 artifact 合并到同一目录，
+          # 都叫 sha256sums.txt 会互相覆盖。
+          sum="sha256sums-${{ matrix.name }}.txt"
+          sha256sum $(ls -1 | grep -v '^sha256sums-' ) > "$sum"
           echo "files=$(ls | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
 
       - name: 上传构建产物
