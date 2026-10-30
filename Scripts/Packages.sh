@@ -95,20 +95,17 @@ if [ -d feeds/packages/lang/golang ]; then
   ./scripts/feeds install -a >/dev/null 2>&1 || true
 fi
 
-# node 换成 sbwml 预编译版（官方 node 从源码编译极慢；sbwml 用 release 预编译产物秒装；
-# 注意：openwrt_helloworld 仓库内并没有 node，node 替换实际来自 sbwml/feeds_packages_lang_node，
-# 路径原地替换，package/feeds/packages/node 符号链接仍指向同一路径无需重建）
+# node 换成 sbwml 预编译版 https://github.com/sbwml/feeds_packages_lang_node
+# （官方 node 从源码编译极慢；sbwml 用 release 预编译产物秒装；helloworld 仓库本身不含 node，
+#  node 替换来自该专用仓库。原地替换路径，package/feeds/packages/node 符号链接无需重建）
+# PKG_VERSION 保持 Makefile 原生行为（shell 动态解析 sbwml/node_workflow tags），不做钉入
 if [ -d feeds/packages/lang/node ]; then
   rm -rf feeds/packages/lang/node
   git clone -q --depth 1 -b packages-25.12 https://github.com/sbwml/feeds_packages_lang_node feeds/packages/lang/node ||
     echo "::warning::sbwml node 换源失败，沿用官方版本"
-  # 原 Makefile 的 PKG_VERSION 是动态拉 tags（CI 瞬断会变空导致构建失败），一次性解析后钉入
-  NODE_VER="$(curl -fsSL --retry 3 --max-time 30 https://api.github.com/repos/sbwml/node_workflow/tags 2>/dev/null | grep '"name"' | head -n 1 | sed -E 's/.*"name": "v([^"]+)".*/\1/' || true)"
-  [ -n "$NODE_VER" ] || NODE_VER="22.23.2"
-  sed -i -E "s|^PKG_VERSION:=.*|PKG_VERSION:=${NODE_VER}|" feeds/packages/lang/node/Makefile
   # 注意：不要替换 $(ARCH_PACKAGES)！它在三目标上本就展开为正确资产名
   # （x86→x86_64、BPI-R4→aarch64_cortex-a53、H68K→aarch64_generic），硬编码会串架构
-  echo "   node 已切换为 sbwml 预编译版，版本钉入 ${NODE_VER}"
+  echo "   node 已切换为 sbwml 预编译版（版本由 Makefile 动态解析）"
 fi
 
 # ---------- vlmcsd（permails：根 Makefile 无 PKG_NAME，包名回退=目录名，故目录必须叫 luci-app-vlmcsd，

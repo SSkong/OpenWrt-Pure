@@ -41,7 +41,7 @@
 
 自定义包在官方 feeds 中的依赖已在 `Config/base.config` 显式选中：`node`、`zerotier`、`dnsmasq-full`（sing-box 随 homeproxy 移除后不再主动选，仍在 helloworld 中可选）。
 
-按 helloworld README 的配套操作：feeds 自带的 `xray-core/v2ray-core/v2ray-geodata/sing-box` 等同名核心已自动移除（由 helloworld 版本接管）；`lang/golang` 换 sbwml `23.x` 分支；`lang/node` 换 sbwml 预编译版（`feeds_packages_lang_node@packages-25.12`，PKG_VERSION 钉入防 tags API 瞬空）。
+按 helloworld README 的配套操作：feeds 自带的 `xray-core/v2ray-core/v2ray-geodata/sing-box` 等同名核心已自动移除（由 helloworld 版本接管）；`lang/golang` 换 sbwml `23.x` 分支；`lang/node` 换 sbwml 预编译版（`feeds_packages_lang_node@packages-25.12`，版本由 Makefile 原生动态解析，未做钉入）。
 其余（docker、dae、smartdns、openclash、主题等）**一律不引入**——保持纯净，需要时再按上面的模式加仓库。
 
 `Scripts/Settings.sh` 只做三件事：设备默认管理 IP、主机名、LuCI 概览页构建日期标识。
