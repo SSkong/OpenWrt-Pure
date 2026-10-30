@@ -134,6 +134,7 @@ jobs:
           cd openwrt
           cat ../Config/base.config "../Config/${{ matrix.name }}.config" > .config
           bash ../Scripts/Settings.sh . "${{ matrix.name }}"
+          cp .config .config.requested
           make defconfig
 
       - name: 恢复编译缓存
@@ -155,29 +156,39 @@ jobs:
             -exec find {} -type f -exec touch {} + \;
           echo "工具链缓存已激活"
 
-      - name: 校验配置与包是否存在
+      - name: 校验自定义包是否真实生效
         run: |
           cd openwrt
-          make defconfig > /dev/null 2>&1 || true
-          # 找出配置里选中、但源码树中不存在同名目录的包（虚拟包/子选项除外，它们不报错只被忽略）
-          missing=""
-          while read -r pkg; do
-            [ -z "$pkg" ] && continue
-            case "$pkg" in *_INCLUDE_*|*WITH_*) continue ;; esac
-            if ! find package feeds -maxdepth 6 -type d -name "$pkg" 2>/dev/null | grep -q .; then
-              missing="$missing $pkg"
-            fi
-          done < <(grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9._-]+=y' .config | sed 's/^CONFIG_PACKAGE_//;s/=y$//')
-          n=$(echo "$missing" | wc -w)
+          # 两层反馈（比静态比对二进制索引可靠）：
+          #  a) 无对应源码目录 —— 包名/来源问题
+          #  b) defconfig 后被取消选中 —— 依赖不满足（官方二进制索引名与 buildroot 包名不一一对应，
+          #     如 libstdcpp→libstdcpp6，静态核对会误报，以 defconfig 结果为权威）
+          req=$(grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9._-]+=y' .config.requested | sed 's/^CONFIG_PACKAGE_//;s/=y$//' | sort)
+          fin=$(grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9._-]+=y' .config | sed 's/^CONFIG_PACKAGE_//;s/=y$//' | sort)
+          nodir=""; dropped=""
+          for pkg in $req; do
+            find package feeds -maxdepth 6 -type d -name "$pkg" 2>/dev/null | grep -q . || nodir="$nodir $pkg"
+            echo "$fin" | grep -qx "$pkg" || dropped="$dropped $pkg"
+          done
           {
-            echo "### 配置项校验（${{ matrix.name }}）：${n} 个选中包在源码中无对应目录（会被忽略）"
-            if [ "$n" -gt 0 ]; then
-              echo '```'
-              echo "$missing" | tr ' ' '\n' | sed '/^$/d' | sort
-              echo '```'
-            fi
+            echo "### 自定义包生效校验（${{ matrix.name }}）"
+            echo "- 请求包数：$(echo "$req" | wc -w)"
+            echo "- 无源码目录：${nodir:-无}"
+            echo "- defconfig 后取消选中（依赖不满足）：${dropped:-无}"
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "无对应目录的选中包数：$n"
+          echo "无目录:$nodir"
+          echo "被取消:$dropped"
+          [ -z "$dropped" ] || echo "::warning::存在被 defconfig 取消选中的包（依赖缺失）:$dropped"
+          # 要求引入的 17 个包全部生效，否则直接失败（避免默默产出缺包固件）
+          lost=0
+          for want in luci-app-homeproxy luci-app-natmapt stuntman-client luci-app-mosdns \
+            luci-app-bandix luci-app-unblockneteasemusic luci-app-wechatpush luci-app-taskplan \
+            luci-app-timecontrol luci-app-netspeedtest luci-app-watchdog luci-app-partexp \
+            luci-app-airconnect luci-app-zerotier luci-app-vlmcsd; do
+            echo "$fin" | grep -qx "$want" || { echo "✗ 未生效: $want"; lost=$((lost+1)); }
+          done
+          [ "$lost" = "0" ] || { echo "ERROR: $lost 个指定包未能生效"; exit 1; }
+          echo "✅ 15 个指定包全部选中生效"
 
       - name: 下载源码包
         run: |

@@ -1,11 +1,10 @@
 #!/bin/bash
-# 自定义软件包引入：整仓克隆到 package/custom/<名称>
+# 自定义软件包引入 —— 仅用户指定的原始上游仓库（全部克隆到 package/custom/<名称>）
 #
-# 原理：OpenWrt 构建系统递归扫描 package/ 下的 Makefile，按 Makefile 所在目录识别包，
-# 所以"仓库根本身是包"和"仓库内含多个子包目录"都能被正确发现，无需手工拆分。
-# 分支均已核实为对应仓库的默认分支。
+# 原理：OpenWrt 按 Makefile 所在目录递归识别包，整仓克隆即可；仓库根本身是包、
+# 或内部含多个子包目录，都能被正确发现，无需手工拆分。分支均已核实为默认分支。
 #
-# 原则：只加包，不改内核。官方 feeds 已有的包不在此重复（在 Config 里直接选中即可）。
+# 原则：基底保持纯净（官方 25.12 + LuCI），只在这里引入下面点名的包；不加其它自定义包。
 set -u
 
 cd "${1:-.}" || exit 1
@@ -25,78 +24,45 @@ clone_pkg() {
 	rm -rf "package/custom/${name}/.github" "package/custom/${name}/.git"
 }
 
-# sparse_add <目标名> <路径列表...>   —— 从 QiuSimons/OpenWrt-Add 只取需要的目录
-sparse_add() {
-	local target="$1"; shift
-	local paths="$*"
-	echo "==> ${target}  <= QiuSimons/OpenWrt-Add (sparse)"
-	rm -rf "package/custom/${target}" /tmp/oa-sparse
-	mkdir -p "package/custom/${target}"
-	if ! git clone -q --depth 1 --filter=blob:none --no-checkout \
-		https://github.com/QiuSimons/OpenWrt-Add /tmp/oa-sparse 2>/dev/null; then
-		echo "ERROR: OpenWrt-Add 克隆失败" >&2; FAIL=1; return 1
-	fi
-	(
-		cd /tmp/oa-sparse
-		git sparse-checkout set ${paths} >/dev/null 2>&1 && git checkout -q master >/dev/null 2>&1
-	) || { echo "ERROR: OpenWrt-Add 稀疏检出失败" >&2; FAIL=1; rm -rf /tmp/oa-sparse; return 1; }
-	cp -rf /tmp/oa-sparse/. "package/custom/${target}/"
-	rm -rf /tmp/oa-sparse
-}
+# ---------- natmapt（muink）：核心 + LuCI ----------
+clone_pkg natmapt             muink/openwrt-natmapt              master  # PKG_NAME=natmapt
+clone_pkg luci-app-natmapt    muink/luci-app-natmapt             master
 
-# ---------- 代理 / 分流 ----------
-clone_pkg openclash         vernesong/OpenClash              master
-clone_pkg dae               sbwml/luci-app-dae               main   # 含 dae + luci-app-dae
-clone_pkg honk              189160/luci-app-honk             main   # 含 honk + luci-app-honk
-clone_pkg fchomo            fcshark-org/openwrt-fchomo       master # 含 mihomo + luci-app-fchomo
-clone_pkg nikki             nikkinikki-org/OpenWrt-nikki     main   # 含 nikki/mihomo-* + luci-app-nikki
-clone_pkg flowcone          QiuSimons/FlowCone               master # openwrt/{flowcone,luci-app-flowcone}
-clone_pkg vmlinux-btf       QiuSimons/vmlinux-btf            master # dae / flowcone 的 BTF 元数据
+# ---------- stuntman（muink，natmapt 依赖的 STUN 客户端/服务端）----------
+clone_pkg stuntman            muink/openwrt-stuntman             master  # stuntman-client/-server/-testcode
 
-# ---------- DNS / 广告过滤 / 应用管理 ----------
-clone_pkg smartdns          pymumu/openwrt-smartdns          master
-clone_pkg luci-app-smartdns pymumu/luci-app-smartdns         master
-clone_pkg adguardhome       w9315273/luci-app-adguardhome    main
-clone_pkg openappfilter     destan19/OpenAppFilter           master
+# ---------- mosdns（sbwml：核心 + geo2txt + LuCI 同仓）----------
+clone_pkg mosdns              sbwml/luci-app-mosdns              v5
 
-# ---------- 组网 / 网络工具 ----------
-clone_pkg easytier          EasyTier/luci-app-easytier       main
+# ---------- bandix（timsaya：核心 + LuCI 分仓）----------
+clone_pkg bandix              timsaya/openwrt-bandix             main    # PKG_NAME=bandix
+clone_pkg luci-app-bandix     timsaya/luci-app-bandix            main
 
-# ---------- OpenWrt-Add 精选（稀疏检出）----------
-sparse_add oa-apps \
-	apps/luci-app-airconnect apps/airconnect-openwrt \
-	apps/luci-app-bandix apps/openwrt-bandix \
-	apps/luci-app-natmapt apps/openwrt-natmapt \
-	apps/luci-app-arpbind apps/luci-app-ap-modem apps/luci-app-3cat \
-	apps/luci-app-partexp apps/luci-app-taskplan \
-	apps/luci-app-unblockneteasemusic apps/luci-app-wechatpush apps/luci-app-ramfree \
-	apps/luci-app-mosdns apps/luci-app-zerotier apps/homeproxy apps/addition-trans-zh
+# ---------- 网易云音乐解锁（UnblockNeteaseMusic 官方）----------
+clone_pkg unblockneteasemusic UnblockNeteaseMusic/luci-app-unblockneteasemusic js
 
-sparse_add oa-legacy \
-	legacy/openwrt_pkgs/luci-app-vlmcsd legacy/openwrt_pkgs/vlmcsd \
-	legacy/openwrt_pkgs/luci-app-usb-printer legacy/openwrt_pkgs/luci-app-cpufreq \
-	legacy/openwrt_pkgs/luci-app-autoreboot legacy/openwrt_pkgs/luci-app-eqos \
-	legacy/openwrt_pkgs/luci-app-socat legacy/openwrt_pkgs/luci-app-vsftpd \
-	legacy/openwrt_pkgs/coremark legacy/openwrt_pkgs/lshw \
-	legacy/luci-app-xlnetacc legacy/luci-app-cpulimit legacy/luci-app-frpc_frps \
-	legacy/openwrt_pkgs/filebrowser legacy/openwrt_pkgs/gowebdav legacy/openwrt_pkgs/luci-app-gowebdav
+# ---------- 微信推送（tty228）----------
+clone_pkg wechatpush          tty228/luci-app-wechatpush         master
 
-# ---------- 存储 / 文件 / 系统 ----------
-clone_pkg harbor-file-pro   whzhni1/luci-app-harbor-file-pro main
-clone_pkg openlist2         sbwml/luci-app-openlist2         main
-clone_pkg diskman           lisaac/luci-app-diskman          master
-clone_pkg watchdog          sirpdboy/luci-app-watchdog       main
-clone_pkg wolmon            my1639963/luci-app-wolmon        main
+# ---------- sirpdboy 系列（taskplan / timecontrol / netspeedtest / watchdog / partexp）----------
+clone_pkg taskplan            sirpdboy/luci-app-taskplan         main
+clone_pkg timecontrol         sirpdboy/luci-app-timecontrol      main    # luci-app-timecontrol（nft 定时控制）
+clone_pkg netspeedtest        sirpdboy/netspeedtest              main    # luci-app-netspeedtest + ookla-speedtest + homebox
+clone_pkg watchdog            sirpdboy/luci-app-watchdog         main    # luci-app-watchdog + watchdog
+clone_pkg partexp             sirpdboy/luci-app-partexp          main    # luci-app-partexp（分区扩容）
 
-# ---------- 监控 / 运维 ----------
-clone_pkg fluxora           cndoin/luci-app-fluxora          main   # PKG_NAME=luci-app-wan-traffic
-clone_pkg online-upgrade    Arthur97172/luci-app-online-upgrade main
-clone_pkg substore          Arthur97172/luci-app-substore    main
-clone_pkg ghacc             sqchr888/luci-app-ghacc          main
-clone_pkg oxidns            svenshi/luci-app-oxidns          main
+# ---------- airconnect（sbwml：airconnect 核心 + LuCI 同仓）----------
+clone_pkg airconnect          sbwml/luci-app-airconnect          main
 
-# ---------- 主题 ----------
-clone_pkg theme-shadcn      eamonxg/luci-theme-shadcn        main
+# ---------- zerotier LuCI（rabbitrogi；核心 zerotier 用官方 feeds）----------
+clone_pkg zerotier-luci       rabbitrogi/luci-app-zerotier       main
+
+# ---------- homeproxy（immortalwrt；依赖 +sing-box）----------
+clone_pkg homeproxy           immortalwrt/homeproxy              master
+
+# ---------- vlmcsd（permails：根 Makefile 无 PKG_NAME，包名回退=目录名，故目录必须叫 luci-app-vlmcsd，
+#            否则与其内嵌的 vlmcsd/ 子包同名 → buildroot 重复包错误）----------
+clone_pkg luci-app-vlmcsd     permails/luci-app-vlmcsd          main
 
 echo "==> 自定义包目录："
 find package/custom -maxdepth 1 -mindepth 1 -type d | sort

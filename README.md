@@ -19,16 +19,30 @@
 
 ## 自定义软件包
 
-全部从上游源码仓库克隆后编译（`Scripts/Packages.sh`），按需增删即可：
+基底保持官方纯净（LuCI + 中文语言包），只引入以下**原始上游**仓库（`Scripts/Packages.sh`）：
 
-- **代理/分流**：OpenClash、dae、honk、fchomo(mihomo)、nikki、flowcone、vmlinux-btf
-- **DNS/过滤**：smartdns(pymumu 核心 + LuCI + WebUI)、adguardhome(w9315273 版)、OpenAppFilter
-- **组网/网络**：easytier、natmapt、bandix、arpbind、ap-modem、airconnect、homeproxy、zerotier、3cat、unblockneteasemusic、wechatpush、ramfree、partexp、taskplan
-- **存储/系统**：harbor-file-pro、openlist2、diskman、watchdog、wolmon、vlmcsd、usb-printer、cpufreq、xlnetacc
-- **监控/运维**：fluxora(wan-traffic)、online-upgrade、substore、ghacc、oxidns
-- **主题**：shadcn
+| 包 | 上游仓库 | 说明 |
+|---|---|---|
+| natmapt + LuCI | `muink/openwrt-natmapt`、`muink/luci-app-natmapt` | 全锥 NAT 端口映射 |
+| stuntman | `muink/openwrt-stuntman` | STUN 客户端（natmapt 配套） |
+| mosdns + LuCI + geo2txt | `sbwml/luci-app-mosdns` (v5) | DNS 分流 |
+| bandix + LuCI | `timsaya/openwrt-bandix`、`timsaya/luci-app-bandix` | 带宽利用 |
+| 网易云解锁 | `UnblockNeteaseMusic/luci-app-unblockneteasemusic` (js) | 依赖官方 node |
+| 微信推送 | `tty228/luci-app-wechatpush` | |
+| 计划任务 | `sirpdboy/luci-app-taskplan` | |
+| 定时控制 | `sirpdboy/luci-app-timecontrol` | nft 上网时间控制 |
+| 测速 | `sirpdboy/netspeedtest` | 含 ookla-speedtest、homebox |
+| 看门狗 | `sirpdboy/luci-app-watchdog` | 登录防护，含核心包 |
+| 分区扩容 | `sirpdboy/luci-app-partexp` | |
+| AirConnect | `sbwml/luci-app-airconnect` | 含核心，AirPlay 投射 |
+| ZeroTier LuCI | `rabbitrogi/luci-app-zerotier` | 核心用官方 zerotier |
+| HomeProxy | `immortalwrt/homeproxy` | 核心用官方 sing-box |
+| vlmcsd + LuCI | `permails/luci-app-vlmcsd` | KMS 服务器 |
 
-其余（LuCI、docker、ddns、sqm、upnp、wireguard、filemanager、watchcat…）直接用官方 feeds。
+自定义包在官方 feeds 中的依赖已在 `Config/base.config` 显式选中：`sing-box`、`node`、`zerotier`、`dnsmasq-full`。
+其余（docker、dae、smartdns、openclash、主题等）**一律不引入**——保持纯净，需要时再按上面的模式加仓库。
+
+`Scripts/Settings.sh` 只做三件事：设备默认管理 IP、主机名、LuCI 概览页构建日期标识。
 
 ## 用法
 
