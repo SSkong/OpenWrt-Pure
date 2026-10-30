@@ -54,12 +54,12 @@ cfg="$ow/.config"
 
 root="${2:-}"
 [ -n "$root" ] || root="$ow/../.build-cache"
-mkdir -p "$root"
+mkdir -p "$root" || { echo "ERROR: 无法创建缓存根目录 $root" >&2; exit 1; }
 root="$(cd "$root" && pwd)"
 
 go_cache="$root/go-build"
 rs_cache="$root/cargo-target"
-mkdir -p "$go_cache" "$rs_cache"
+mkdir -p "$go_cache" "$rs_cache" || { echo "ERROR: 无法创建缓存子目录" >&2; exit 1; }
 
 echo "==> 编译缓存目录：$root"
 
@@ -68,8 +68,8 @@ echo "==> 编译缓存目录：$root"
 # 那份 fork 里同样有这个符号；万一换源失败或目录缺失，defconfig 只会静默丢掉这一行，
 # 不会报错，所以这里只提示、不失败。
 if grep -rqE '^[[:space:]]*config[[:space:]]+GOLANG_BUILD_CACHE_DIR' "$ow/feeds/packages/lang/golang" 2>/dev/null; then
-  sed -i '/^CONFIG_GOLANG_BUILD_CACHE_DIR=/d' "$cfg"
-  printf 'CONFIG_GOLANG_BUILD_CACHE_DIR="%s"\n' "$go_cache" >> "$cfg"
+  sed -i '/^CONFIG_GOLANG_BUILD_CACHE_DIR=/d' "$cfg" || { echo "ERROR: 改写 .config 失败" >&2; exit 1; }
+  printf 'CONFIG_GOLANG_BUILD_CACHE_DIR="%s"\n' "$go_cache" >> "$cfg" || { echo "ERROR: 写入 .config 失败" >&2; exit 1; }
   echo "   go:   GOCACHE -> $go_cache"
 else
   echo "::warning::feeds 里没有 GOLANG_BUILD_CACHE_DIR，Go 构建缓存仍将落在 \$(TMP_DIR)/go-build"
@@ -84,7 +84,7 @@ if [ -f "$rv" ]; then
     # ?= 不用在这里：CARGO_PKG_CONFIG_VARS 是递归展开变量，用 += 追加即可，
     # 且递归变量在真正执行 recipe 时才展开，此时 RUSTC_TARGET_ARCH 等都已就绪。
     printf '\n# 由 Scripts/Cache.sh 注入：跨构建复用 Rust 编译产物（仅目标包，不影响 rust/host）\nCARGO_PKG_CONFIG_VARS+= CARGO_TARGET_DIR=%s\n' \
-      "$rs_cache" >> "$rv"
+      "$rs_cache" >> "$rv" || { echo "ERROR: 写入 $rv 失败" >&2; exit 1; }
     echo "   rust: CARGO_TARGET_DIR -> $rs_cache"
   fi
 else

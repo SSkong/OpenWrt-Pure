@@ -1,0 +1,63 @@
+name: Validate
+
+# 构建前的静态关卡：几十秒跑完，挡掉那些"要编译两小时才暴露"的低级错误。
+# 覆盖三类：脚本语法、设备矩阵与配置的一致性、配置文件本身的 lint。
+# 都在 Scripts/ 下，本地可以逐条单独跑：
+#   for f in Scripts/*.sh; do bash -n "$f"; done
+#   bash Scripts/CheckDevices.sh
+#   bash Scripts/LintConfig.sh
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: 静态校验
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出本仓库
+        uses: actions/checkout@v4
+
+      - name: Shell 语法检查
+        run: |
+          for f in Scripts/*.sh; do
+            bash -n "$f" || exit 1
+          done
+          echo "Scripts/ 下 $(ls Scripts/*.sh | wc -l) 个脚本语法通过"
+
+      - name: devices.json 合法性
+        run: jq -e 'type == "array" and length > 0' Config/devices.json > /dev/null
+
+      - name: 设备矩阵 ↔ 设备配置 交叉校验
+        # 挡掉"加了 devices.json 忘了加 Config/<name>.config"、target/profile 写错
+        run: bash Scripts/CheckDevices.sh
+
+      - name: 配置 lint
+        # 行语法 / 文件内重复符号 / 覆盖顺序（is not set 必须晚于 =y）
+        run: bash Scripts/LintConfig.sh
+
+      - name: 补丁行尾必须是 LF
+        # CRLF 的补丁打进 LF 的内核源码时报 "context does not match"，现象离原因很远。
+        # .gitattributes 已经强制 LF，这里是防止有人绕过它直接传文件。
+        # 用 tr 逐字节数 CR：grep/awk 在部分环境（MSYS 文本模式）会把 CR 吃掉。
+        run: |
+          bad=0
+          while IFS= read -r f; do
+            n="$(LC_ALL=C tr -cd '\r' < "$f" | wc -c)"
+            if [ "$n" -gt 0 ]; then
+              echo "::error file=$f::补丁含 CRLF 行尾（$n 个 CR），需转成 LF"
+              bad=1
+            fi
+          done < <(find Patches -type f 2>/dev/null)
+          [ "$bad" -eq 0 ] || exit 1
+          echo "Patches/ 行尾检查通过"

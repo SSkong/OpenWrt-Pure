@@ -109,22 +109,43 @@ Actions → **Build OpenWrt** → Run workflow：
 
 ```
 Config/
+  devices.json         # 设备矩阵的唯一事实来源（name/label/target/profile）
   base.config          # 所有设备共用的包配置
   x86.config           # 设备差异（target/profile/专属驱动）
   bpi-r4.config
   h68k.config
 Scripts/
+  lib.sh               # 各脚本共用的守卫工具（die/warn/put/apply_patch_strict/check_rej…）
   Packages.sh          # 克隆自定义包到 package/custom/
   Settings.sh          # 默认主机名/管理IP/LuCI 日期标识（纯配置层）
   H68K.sh              # 仅 H68K：应用设备支持补丁（带内核版本守卫）
   Fullcone.sh          # SONiC fullcone NAT 补丁（必须在 feeds install 之后、download 之前）
   VerifyPackages.sh    # 校验请求的包是否真的进了 .config（可本地单独跑）
   Cache.sh             # 把 Go/Rust 编译缓存挪到可缓存的位置（必须在 defconfig 之前）
+  CheckDevices.sh      # 设备矩阵 ↔ Config/<name>.config 交叉校验（离线）
+  LintConfig.sh        # 配置离线 lint（重复符号 / 覆盖顺序 / 行语法）
 Patches/h68k/          # H68K 两个补丁
 Patches/fullcone/      # fullcone 内核 + nftables/iptables/firewall4/LuCI 补丁
 .github/workflows/build.yml
+.github/workflows/validate.yml   # push/PR 时跑上面两个校验 + shell 语法检查
 .gitattributes         # 强制 LF，防止 CRLF 弄坏脚本与补丁
 ```
+
+### 新增设备 checklist
+
+1. 加 `Config/<name>.config` —— 至少含 `CONFIG_TARGET_<a>=y`、`CONFIG_TARGET_<a>_<b>=y`、`CONFIG_TARGET_<a>_<b>_DEVICE_<profile>=y`。
+2. 加 `Config/devices.json` 条目 —— `name`（= 上一步文件名）、`label`、`target`（`"<a>/<b>"`）、`profile`。
+   `profile` 不是装饰：它会被 `CheckDevices.sh` 拿去比对 `..._DEVICE_<profile>=y`。
+3. 本地跑一次 `bash Scripts/CheckDevices.sh`（也可以 `bash Scripts/CheckDevices.sh <name>` 只验一个）。
+4. 若该设备需要自己的补丁，照 `H68K.sh` 的样子加一个脚本 + `Patches/<name>/`，并在 `build.yml` 里按 `matrix.name == '<name>'` 加一步。补丁守卫直接复用 `Scripts/lib.sh`。
+5. `Config/base.config` 里新增的包，先本地跑 `bash Scripts/LintConfig.sh` 确认没有重复符号或覆盖顺序问题。
+
+### 脚本约定
+
+- 统一 `set -uo pipefail`（不加 `-e`：有些失败是有意容错的，例如换源失败回退官方版本，一律在调用处显式 `|| die` / `warn`）。
+- 公共守卫在 `Scripts/lib.sh`：`die` / `warn`（`::warning::`，GitHub 会渲染成注解）/ `step` / `sub` / `require_file` / `require_dir` / `enter` / `ensure_dir` / `put` / `check_no_crlf` / `apply_patch_strict` / `check_rej` / `has_line`（BRE 正则）/ `has_text`（固定字符串）。
+- **凡是 `sed -i` 改上游文件，改完必须断言**。sed 匹配不到时退出码仍是 0，脚本会假装成功——`Settings.sh` 原先就是这样，管理 IP 悄悄变回 `192.168.1.1`，刷进去才发现。
+- 断言里别写 `\$`：`case` 模式中被引号包住的 `*` 会变成字面量，`grep` BRE 里的 `\$` 行为也不一致。字面量用 `has_text` 或字符类 `[$]`。
 
 管理 IP：X86 `192.168.1.1` / BPI-R4 `192.168.10.1` / H68K `192.168.20.1`（root，初始无密码）。
 
