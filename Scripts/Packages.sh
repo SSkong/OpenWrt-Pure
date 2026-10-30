@@ -82,10 +82,6 @@ clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外�
 WOLMON_MK="package/custom/wolmon/src/luci-app-wolmon/Makefile"
 [ -f "$WOLMON_MK" ] && sed -i 's|^include ../../luci.mk$|include $(TOPDIR)/feeds/luci/luci.mk|' "$WOLMON_MK"
 
-# ---------- adguardhome-tk 依赖修正（25.12 中 rpcd 内置 ucode，无独立的 rpcd-mod-ucode 包）----------
-AGH_MK="package/custom/adguardhome/Makefile"
-[ -f "$AGH_MK" ] && sed -i 's|+rpcd-mod-ucode ||g; s|+rpcd-mod-ucode||g' "$AGH_MK"
-
 # ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 # 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
 # hysteria/shadowsocks 系列/lua-neturl/vmlinux-btf/homeproxy 等 44 个顶层包。
@@ -119,10 +115,16 @@ fi
 # 删除 feeds 源码树与 package/feeds 符号链接中、与 package/custom 同名的副本，
 # 否则 buildroot 收集阶段重复定义直接报错。
 hb_names=$(mktemp)
-# 取全部 custom 包的 PKG_NAME；根 Makefile 无 PKG_NAME 者（luci.mk 回退=目录名）用首层目录名补上
+# 取全部 custom 包的 PKG_NAME（根 Makefile 无 PKG_NAME 者按 luci.mk 目录名回退），
+# 并追加 CONFLICTS 名单：官方 feeds 里与 custom 包互斥的旧副本必须一并删除。
+# 例：luci-app-adguardhome-tk 声明 CONFLICTS:=luci-app-adguardhome，而官方 luci-app-adguardhome
+# 属 luci 合集默认 =y，其 CONFLICTS 经 kconfig 变成 "depends on !PACKAGE_luci-app-adguardhome"，
+# 若不删官方副本，tk 变体会被 defconfig 静默取消选中。
 find package/custom -mindepth 2 -name Makefile 2>/dev/null | while read -r mk; do
   n=$(grep -oE "^PKG_NAME[[:space:]]*:=[[:space:]]*[A-Za-z0-9._+-]+" "$mk" 2>/dev/null | head -1 | sed -E 's/^PKG_NAME[[:space:]]*:=//')
   if [ -n "$n" ]; then echo "$n"; else echo "$mk" | sed -E 's#package/custom/([^/]+)/.*#\1#'; fi
+  grep -oE "^CONFLICTS[[:space:]]*:=[[:space:]]*.*" "$mk" 2>/dev/null \
+    | sed -E 's/^CONFLICTS[[:space:]]*:=[[:space:]]*//' | tr -s ' ' '\n' | grep -E '^[A-Za-z0-9._+-]+$'
 done | sed '/^$/d' | sort -u > "$hb_names"
 # README 明确点名的 4 个先行删除（保险）
 rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}
