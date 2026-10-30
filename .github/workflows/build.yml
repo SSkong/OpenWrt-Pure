@@ -80,9 +80,6 @@ jobs:
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
-      - name: 检出本仓库
-        uses: actions/checkout@v4
-
       - name: 清理磁盘
         uses: smallprogram/maximize-build-space@16007771e4642069097fc3e7444638474e5db178
         with:
@@ -92,6 +89,9 @@ jobs:
           remove-android: "true"
           remove-haskell: "true"
           remove-codeql: "true"
+
+      - name: 检出本仓库
+        uses: actions/checkout@v4
 
       - name: 安装编译依赖
         env:
