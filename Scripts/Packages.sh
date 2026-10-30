@@ -88,14 +88,14 @@ WOLMON_MK="package/custom/wolmon/src/luci-app-wolmon/Makefile"
 # 未被 Config 选中的包不会编译，只参与包索引（无副作用）。
 clone_pkg helloworld          sbwml/openwrt_helloworld            v5
 
-# README 配套操作①：golang 换成 sbwml 23.x（helloworld 的 Go 核心按该版本构建，官方版本可能编不过）
+# README 配套操作①：golang 换成 sbwml 27.x（helloworld 的 Go 核心按该版本构建，官方版本可能编不过）
 if [ -d feeds/packages/lang/golang ]; then
   rm -rf feeds/packages/lang/golang
-  git clone -q --depth 1 -b 23.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang ||
-    echo "::warning::golang 23.x 换源失败，沿用官方版本"
+  git clone -q --depth 1 -b 27.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang ||
+    echo "::warning::golang 27.x 换源失败，沿用官方版本"
   # lang/golang 目录重建后，此前 scripts/feeds install -a 建的符号链接全部悬空，需重建
   ./scripts/feeds install -a >/dev/null 2>&1 || true
-  echo "   golang 已切换为 sbwml 23.x 并重建 feeds 链接"
+  echo "   golang 已切换为 sbwml 27.x 并重建 feeds 链接"
 fi
 
 # README 配套操作②：node 换成 sbwml 预编译版 https://github.com/sbwml/feeds_packages_lang_node
