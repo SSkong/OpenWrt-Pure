@@ -64,6 +64,7 @@ clone_pkg luci-app-vlmcsd     permails/luci-app-vlmcsd           main     # 外�
 
 # ---------- 应用管理 / DNS ----------
 clone_pkg openlist2           sbwml/luci-app-openlist2           main     # openlist2 + luci-app-openlist2
+clone_pkg luci-app-adguardhome-tk  w9315273/luci-app-adguardhome  main  # 目录名必须=PKG_NAME：该包声明 CONFLICTS:=luci-app-adguardhome，若克隆到名为 adguardhome 的目录会与官方核心包同名
 clone_pkg wolmon              my1639963/luci-app-wolmon          main     # src/luci-app-wolmon，下方修相对 include
 clone_pkg harbor-file-pro     whzhni1/luci-app-harbor-file-pro   main     # luci-app-harbor-file-pro
 clone_pkg openappfilter       destan19/OpenAppFilter             master   # luci-app-oaf + oaf + open-app-filter
@@ -125,6 +126,15 @@ find package/custom -mindepth 2 -name Makefile 2>/dev/null | while read -r mk; d
 done | sed '/^$/d' | sort -u > "$hb_names"
 # README 明确点名的 4 个先行删除（保险）
 rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}
+
+# luci-app-adguardhome-tk 声明 CONFLICTS:=luci-app-adguardhome，而 feeds install -a 会把官方
+# luci-app-adguardhome 装进 package/feeds/luci/，kconfig 里变成
+# "depends on !PACKAGE_luci-app-adguardhome" → tk 变体被静默取消。
+# 上游用 SDK 时只 install 指定包所以不会遇到，我们装全量 feeds 必须显式删掉官方副本。
+for _p in luci-app-adguardhome luci-i18n-adguardhome-zh-cn; do
+	find feeds -maxdepth 4 -mindepth 2 -type d -name "$_p" -exec rm -rf {} + 2>/dev/null || true
+	find package/feeds -maxdepth 2 -name "$_p" -exec rm -rf {} + 2>/dev/null || true
+done
 
 removed=0
 while read -r n; do
