@@ -38,6 +38,12 @@ jobs:
       matrix: ${{ steps.m.outputs.matrix }}
       version: ${{ steps.v.outputs.version }}
     steps:
+      # 设备矩阵的唯一事实来源是 Config/devices.json（原来是内联在这段 YAML 里的
+      # 一份 JSON，新增设备要同时改这里和 Config/<name>.config，且漏改要到构建
+      # 最后一步才暴露）。现在 setup 只读它，并由 CheckDevices.sh 交叉校验。
+      - name: 检出本仓库
+        uses: actions/checkout@v4
+
       - name: 解析 OpenWrt 版本
         id: v
         run: |
@@ -57,18 +63,20 @@ jobs:
       - name: 生成设备矩阵
         id: m
         run: |
-          all='[
-            {"name":"x86","label":"X86","target":"x86/64","profile":"generic"},
-            {"name":"bpi-r4","label":"BPI-R4","target":"mediatek/filogic","profile":"bananapi_bpi-r4"},
-            {"name":"h68k","label":"H68K","target":"rockchip/armv8","profile":"hinlink_h68k"}
-          ]'
           sel="${{ inputs.devices }}"
           sel=$(echo "$sel" | tr 'A-Z' 'a-z' | tr '，' ',' | tr -d ' ')
           if [ -z "$sel" ]; then
-            echo "matrix=$(echo "$all" | jq -c '{include:.}')" >> "$GITHUB_OUTPUT"
+            echo "matrix=$(jq -c '{include:.}' Config/devices.json)" >> "$GITHUB_OUTPUT"
           else
-            echo "matrix=$(echo "$all" | jq -c --arg s "$sel" '{include:[.[]|select(.name as $n | ($s|split(",")|index($n)))]}')" >> "$GITHUB_OUTPUT"
+            echo "matrix=$(jq -c --arg s "$sel" '{include:[.[]|select(.name as $n | ($s|split(",")|index($n)))]}' Config/devices.json)" >> "$GITHUB_OUTPUT"
           fi
+          echo "names=$sel" >> "$GITHUB_OUTPUT"
+          echo "选定设备: ${sel:-（全部）}"
+
+      - name: 校验设备矩阵与配置一致
+        # 挡掉"加了 devices.json 忘了加 Config/<name>.config"或 target/profile 写错
+        # 这类要到构建最后一步才暴露的错位。本地也能跑：bash Scripts/CheckDevices.sh
+        run: bash Scripts/CheckDevices.sh "${{ steps.m.outputs.names }}"
 
   build:
     name: ${{ matrix.label }}
