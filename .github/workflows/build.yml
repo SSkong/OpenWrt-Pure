@@ -108,6 +108,29 @@ jobs:
             python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools \
             subversion swig time uglifyjs unzip upx-ucl wget xz-utils zip zlib1g-dev zstd
 
+      - name: 准备 BPF 宿主工具链
+        # dae / daed 会 include bpf.mk，在 USE_LLVM_HOST 模式下它按「不带版本号」的
+        # clang / llc / opt / llvm-dis / llvm-strip 去 PATH 里找（见 include/bpf.mk 的
+        # find-llvm-tool），而 Ubuntu 默认只装带版本号的（clang-18、llc-18…）。
+        # 这里把实际 LLVM 目录里的工具软链到 /usr/local/bin，使 LLVM_VER 为空时
+        # 四个工具都能命中；缺少任何一个，dae/daed 会在编 eBPF 时失败。
+        run: |
+          set -euo pipefail
+          llvm_bin="$(dirname "$(readlink -f "$(command -v clang)")")"
+          echo "LLVM 工具目录: $llvm_bin"
+          linked=0
+          for t in clang llc opt llvm-dis llvm-strip llvm-ar llvm-nm llvm-objcopy llvm-ranlib; do
+            if [ -x "$llvm_bin/$t" ]; then
+              sudo ln -sf "$llvm_bin/$t" "/usr/local/bin/$t"
+              linked=$((linked + 1))
+            fi
+          done
+          echo "已建立 $linked 个软链"
+          clang --version | head -1
+          for t in llc opt llvm-dis llvm-strip; do
+            command -v "$t" >/dev/null 2>&1 || echo "::warning::BPF 工具链缺少 $t，dae/daed 编译可能失败"
+          done
+
       - name: 克隆 OpenWrt 源码（官方）
         run: |
           git clone -q --depth 1 -b "v${{ needs.setup.outputs.version }}" \
