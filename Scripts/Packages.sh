@@ -64,7 +64,6 @@ clone_pkg luci-app-vlmcsd     permails/luci-app-vlmcsd           main     # 外�
 
 # ---------- 应用管理 / DNS ----------
 clone_pkg openlist2           sbwml/luci-app-openlist2           main     # openlist2 + luci-app-openlist2
-clone_pkg adguardhome         w9315273/luci-app-adguardhome      main     # 真实包名 luci-app-adguardhome-tk（PROVIDES/CONFLICTS luci-app-adguardhome）
 clone_pkg wolmon              my1639963/luci-app-wolmon          main     # src/luci-app-wolmon，下方修相对 include
 clone_pkg harbor-file-pro     whzhni1/luci-app-harbor-file-pro   main     # luci-app-harbor-file-pro
 clone_pkg openappfilter       destan19/OpenAppFilter             master   # luci-app-oaf + oaf + open-app-filter
@@ -81,20 +80,6 @@ clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外�
 # ---------- wolmon 相对 include 修正（克隆布局下 ../../luci.mk 指向错误）----------
 WOLMON_MK="package/custom/wolmon/src/luci-app-wolmon/Makefile"
 [ -f "$WOLMON_MK" ] && sed -i 's|^include ../../luci.mk$|include $(TOPDIR)/feeds/luci/luci.mk|' "$WOLMON_MK"
-
-# ---------- adguardhome(tk) Makefile 修补 ----------
-# 1) PKG_BUILD_DEPENDS:=luci-base/host 指向一个不存在的 host 变体。buildroot 生成包
-#    元数据时会把整个 Makefile 跳过，表现为 tmp/.config-package.in 里完全没有
-#    PACKAGE_luci-app-adguardhome-tk（连它的 i18n 子包也没有），defconfig 无从选中。
-# 2) PROVIDES 与 CONFLICTS 写成同一个名字（luci-app-adguardhome）构成自冲突。
-#    官方副本已在上面显式删除，这里只保留 PROVIDES。
-AGH_MK="package/custom/adguardhome/Makefile"
-if [ -f "$AGH_MK" ]; then
-	sed -i '/^PKG_BUILD_DEPENDS:=luci-base\/host/d' "$AGH_MK"
-	sed -i 's|^[[:space:]]*CONFLICTS:=luci-app-adguardhome$|	CONFLICTS:=|' "$AGH_MK"
-	sed -i 's|^[[:space:]]*CONFLICTS:=luci-i18n-adguardhome-zh-cn$|	CONFLICTS:=|' "$AGH_MK"
-	echo "   adguardhome: 已移除无效的 luci-base/host 构建依赖与自冲突 CONFLICTS"
-fi
 
 # ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 # 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
@@ -140,18 +125,6 @@ find package/custom -mindepth 2 -name Makefile 2>/dev/null | while read -r mk; d
 done | sed '/^$/d' | sort -u > "$hb_names"
 # README 明确点名的 4 个先行删除（保险）
 rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}
-
-# adguardhome-tk 与官方 luci-app-adguardhome 互斥，必须删官方副本。
-# tk 变体声明 CONFLICTS:=luci-app-adguardhome，kconfig 里变成
-# "depends on !PACKAGE_luci-app-adguardhome"；而官方 luci 合集里那个包默认 =y，
-# 条件不成立 → tk 变体被 defconfig 静默取消（表现为 .config-package.in 里根本
-# 没有 PACKAGE_luci-app-adguardhome-tk 条目）。
-# 下面的通用去重按 PKG_NAME 匹配，而 tk 的 PKG_NAME 是 luci-app-adguardhome-tk，
-# 匹配不到官方目录名，所以这里必须显式删。
-for _p in luci-app-adguardhome luci-i18n-adguardhome-zh-cn; do
-	find feeds -maxdepth 4 -mindepth 2 -type d -name "$_p" -exec rm -rf {} + 2>/dev/null || true
-	find package/feeds -maxdepth 2 -name "$_p" -exec rm -rf {} + 2>/dev/null || true
-done
 
 removed=0
 while read -r n; do
