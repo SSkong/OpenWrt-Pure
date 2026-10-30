@@ -78,16 +78,6 @@ clone_pkg theme-footstrap     VizzleTF/luci-theme-footstrap      main     # 子�
 clone_pkg luci-theme-aurora   eamonxg/luci-theme-aurora          master   # 根无PKG_NAME，回退=目录名，外层须叫 luci-theme-aurora
 clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外层须叫 luci-app-aurora-config
 
-# ---------- adguardhome-tk 依赖修正 ----------
-# 上游声明 +rpcd-mod-ucode；25.12 的 rpcd 通过 BuildPlugin,ucode 仍导出该符号，
-# 本应无需改。但实测它在 defconfig 阶段被取消选中，故改用更宽松的依赖：
-# 去掉 rpcd-mod-ucode（LuCI 已依赖 luci-base，rpcd 随之必然存在），避免因符号缺失被丢弃。
-AGH_MK="package/custom/adguardhome/Makefile"
-if [ -f "$AGH_MK" ]; then
-  sed -i 's|[[:space:]]*+rpcd-mod-ucode||g' "$AGH_MK"
-  echo "   adguardhome-tk: 已移除 +rpcd-mod-ucode 依赖"
-fi
-
 # ---------- wolmon 相对 include 修正（克隆布局下 ../../luci.mk 指向错误）----------
 WOLMON_MK="package/custom/wolmon/src/luci-app-wolmon/Makefile"
 [ -f "$WOLMON_MK" ] && sed -i 's|^include ../../luci.mk$|include $(TOPDIR)/feeds/luci/luci.mk|' "$WOLMON_MK"
