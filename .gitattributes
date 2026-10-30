@@ -1,0 +1,17 @@
+# 统一 LF。Windows 上 core.autocrlf=true 会把 checkout 出来的文件转成 CRLF，
+# 一旦某个编辑器把 CRLF 保存回仓库，shell 脚本在 Linux runner 上会报
+# "bad interpreter: /usr/bin/env bash^M"，补丁也会因上下文不匹配而打不上。
+* text=auto eol=lf
+
+*.sh     text eol=lf
+*.yml    text eol=lf
+*.config text eol=lf
+*.patch  text eol=lf
+*.md     text eol=lf
+*.json   text eol=lf
+
+*.img    binary
+*.gz     binary
+*.itb    binary
+*.bin    binary
+*.fip    binary

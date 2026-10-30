@@ -74,7 +74,7 @@ jobs:
     name: ${{ matrix.label }}
     needs: setup
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 350
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
@@ -183,7 +183,7 @@ jobs:
           # want 从 .config.requested 自动提取（luci-app-* / luci-theme-* / stuntman-client / autocore-*），
           # 与 base.config、设备 config 始终同步，不会因加包而漏改本清单。
           lost=0; total=0
-          mapfile -t want < <(grep -oE '^CONFIG_PACKAGE_(luci-app-[A-Za-z0-9._+-]+|luci-theme-[A-Za-z0-9._+-]+|stuntman-client|autocore-(arm|x86))=y' .config.requested \
+          mapfile -t want < <(grep -oE '^CONFIG_PACKAGE_(luci-app-[A-Za-z0-9._+-]+|luci-theme-[A-Za-z0-9._+-]+|stuntman-client|autocore-(arm|x86)|kmod-[A-Za-z0-9._+-]+)=y' .config.requested \
             | sed 's/^CONFIG_PACKAGE_//;s/=y$//' | sort -u)
           for w in "${want[@]}"; do
             total=$((total+1))
@@ -234,14 +234,24 @@ jobs:
       - name: 下载源码包
         run: |
           cd openwrt
-          make download -j16 || true
-          dl=$(make download -j1 2>&1 | grep -c "^ERROR" || true)
-          [ "$dl" -gt 0 ] && echo "::warning::存在 ${dl} 个下载失败项，编译期会重试" || echo "下载完成"
+          # 并行下载失败多半是上游网络抖动，单线程补一次；只有补完仍失败才算真问题
+          if make -j16 download > /tmp/dl1.log 2>&1; then
+            echo "下载完成"
+          else
+            echo "首次并行下载有失败项，转单线程重试"
+            if make -j1 download > /tmp/dl2.log 2>&1; then
+              echo "下载完成（重试后全部成功）"
+            else
+              echo "::warning::仍有源码包下载失败，编译阶段会再试一次"
+              grep -iE "error|failed|cannot" /tmp/dl2.log | tail -20 || true
+            fi
+          fi
 
       - name: 编译
         run: |
+          set -o pipefail   # 默认 bash -e 不含 pipefail，不加这个 tee 会把 make 的失败吞掉
           cd openwrt
-          make -j$(nproc) || {
+          make -j$(( $(nproc) + 1 )) 2>&1 | tee ../build.log || {
             echo "::warning::并行编译失败，转单线程定位错误"
             timeout 1800 make -j1 V=s 2>&1 | tail -200
             exit 1
@@ -250,22 +260,25 @@ jobs:
       - name: 收集产物
         id: art
         run: |
-          ver="${{ needs.setup.outputs.version }}"
-          date=$(date -u +%Y-%m-%d)
           out="artifact/${{ matrix.name }}"
           mkdir -p "$out"
           src="openwrt/bin/targets/${{ matrix.target }}"
-          find "$src" -maxdepth 1 -type f \( -name "*.img.gz" -o -name "*.itb" -o -name "*efi.img.gz" \) \
+          # 主镜像：x86 是 *-combined(-efi).img.gz，mediatek 是 *.itb + sdcard.img.gz，
+          # rockchip 是 *sysupgrade.img.gz
+          find "$src" -maxdepth 1 -type f \( -name "*.img.gz" -o -name "*.itb" \) \
             -exec cp -f {} "$out/" \;
-          # x86/BPI-R4 的 factory/preloader 等引导件（如有）
-          find "$src" -maxdepth 1 -type f \( -name "*preloader*.bin" -o -name "*fip*.bin" -o -name "*gpt*.bin" \) \
+          # 引导件：mediatek 的 preloader 是 .bin，BL31/U-Boot 是 .fip（不是 .bin，
+          # 原先写成 *fip*.bin 会把这些文件全部漏掉，导致 eMMC/救砖包缺失）
+          find "$src" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.fip" \) \
             -exec cp -f {} "$out/" \;
+          # 已装包清单：排查"包到底进没进去"最直接
+          find "$src" -maxdepth 1 -type f -name "*.manifest" -exec cp -f {} "$out/" \;
           cd "$out"
-          rm -f *.sha256
           ls -lh
-          sha256sum * > "../${{ matrix.name }}-${ver}-${date}.sha256"
-          echo "files=$(ls | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
           [ -n "$(ls -A)" ] || { echo "ERROR: 未找到任何固件产物" >&2; exit 1; }
+          # 校验和必须和设备产物放在同一目录，才能被 upload-artifact 一起带走
+          sha256sum $(ls -1 | grep -v '^sha256sums.txt$') > sha256sums.txt
+          echo "files=$(ls | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
@@ -275,8 +288,44 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+      - name: 截断构建日志
+        if: failure()
+        run: |
+          [ -f build.log ] && tail -n 5000 build.log > build-tail.log || true
+
+      - name: 上传失败诊断包
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-${{ matrix.name }}-${{ github.run_id }}
+          path: |
+            build-tail.log
+            openwrt/.config
+            openwrt/.config.requested
+            openwrt/logs/
+            openwrt/bin/targets/**/*.manifest
+          retention-days: 7
+          if-no-files-found: warn
+
+  # 发布单独成一个 job：三个设备并行时，如果各自去创建同一个 tag 的 Release，
+  # ncipollo/release-action 的 replacesArtifacts 会互相删掉对方刚上传的文件，
+  # 最终只留下最后完成的那一个设备。汇总到单个 job 后串行上传，才稳定。
+  publish:
+    name: 汇总发布
+    needs: [setup, build]
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 下载全部设备产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 列出待发布文件
+        run: ls -lh dist
+
       - name: 发布到 Release
-        if: inputs.publish
         uses: ncipollo/release-action@v1
         with:
           name: OpenWrt ${{ needs.setup.outputs.version }}
@@ -285,4 +334,4 @@ jobs:
           allowUpdates: true
           replacesArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: artifact/${{ matrix.name }}/*
+          artifacts: dist/*
