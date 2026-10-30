@@ -191,8 +191,12 @@ jobs:
         # 缓存恢复后必须刷新 stamp 时间戳，否则 make 认为 host/工具链未安装而重编
         if: steps.cache.outputs.cache-hit == 'true'
         run: |
-          find openwrt/staging_dir -type d -name stamp -not -path "*target*" \
-            -exec find {} -type f -exec touch {} + \;
+          # 原来写成嵌套 `find ... -exec find {} -type f -exec touch {} + \;`：
+          # -exec ... + 只允许出现一个 {}，GNU find 直接报
+          # "Only one instance of {} is supported with -exec ... +" 并返回 1。
+          # 这步只在 cache-hit 时才跑，而之前几次都是 miss，所以一直没暴露；
+          # 第一次命中就在编译前把 job 炸了。改成单条 find + 一次 -exec ... +。
+          find openwrt/staging_dir -type f -path "*/stamp/*" -not -path "*target*" -exec touch {} +
           echo "工具链缓存已激活"
 
       - name: 恢复 Go 编译缓存
