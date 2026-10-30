@@ -206,10 +206,12 @@ jobs:
                 echo "    索引中含该包名片段的符号行："
                 tok=$(echo "$w" | sed -E 's/^luci-app-//;s/^luci-theme-//;s/-tk$//')
                 grep -n "$tok" tmp/.config-package.in 2>/dev/null | head -15 | sed 's/^/      /'
-                echo "    扫描阶段针对该目录的报错（若有）："
-                d2=$(find package -maxdepth 2 -type d -name adguardhome 2>/dev/null | head -1)
-                [ -n "$d2" ] && { echo "      源码目录: $d2"; ls -1 "$d2" 2>/dev/null | head -10 | sed 's/^/        /'; \
-                  make -s "${d2#/}/scan" 2>&1 | head -20 | sed 's/^/        /'; }
+                echo "    该精确符号在 tmp/ 各包信息中的出现情况："
+                grep -rln "$w" tmp/info tmp/.config-package.in 2>/dev/null | sed 's/^/      found-in: /' || true
+                echo "    源码目录: $(find package -maxdepth 2 -type d -name adguardhome 2>/dev/null | head -1)"
+                AGHMK=package/custom/adguardhome/Makefile
+                [ -f "$AGHMK" ] && { echo "      Makefile 行数: $(wc -l <"$AGHMK"), 前 12 行:"; head -12 "$AGHMK" | sed 's/^/        /'; \
+                  echo "      define Package 行: $(grep -c '^define Package' "$AGHMK")"; grep -n '^define Package\|^PKG_NAME\|^PKGARCH\|BuildPackage' "$AGHMK" | sed 's/^/        /'; }
                 continue
               fi
               end=$(( start + 30 ))
