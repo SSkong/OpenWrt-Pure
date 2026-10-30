@@ -67,6 +67,15 @@ clone_pkg diskbox             permails/luci-app-diskbox          master   # luci
 clone_pkg socat-reforged      busybin/luci-app-socat-reforged    main     # luci-app-socat-reforged（socat 端口转发）
 clone_pkg luci-app-vlmcsd     permails/luci-app-vlmcsd           main     # 外层须叫 luci-app-vlmcsd，否则与内嵌 vlmcsd/ 子包同名
 
+# ---------- 测速 / 网络访问控制 ----------
+# cfs：Cloudflare 优选 IP + 测速，可联动 smartdns / 阿里 DDNS。LUCI_PKGARCH=all，
+# 主程序 cfst 不在包内，而是首次运行时按架构从 GitHub Releases 下载（脚本内置
+# ghfast.top / ghproxy.cc 镜像），所以设备侧需要 wget 或 curl + tar + gzip。
+clone_pkg luci-app-cloudflarespeedtest  stevenjoezhang/luci-app-cloudflarespeedtest  main
+# languard：LAN 侧访问控制，纯 shell + nft 规则集（会在 /etc/nftables.d/ 落 90-languard.nft），
+# 依赖 firewall4 / nftables / bash / coreutils，均为官方 feeds 包。
+clone_pkg luci-app-languard             rheatin/luci-app-languard                    main
+
 # ---------- 设备专属应用（只在对应设备的 config 里启用，其他设备克隆但不选）----------
 # BPI-R4：风扇 PWM 调速。LUCI_DEPENDS 带 @TARGET_mediatek_filogic，
 # 在其他 target 上会被 kconfig 自动隐藏，不会因"未生效"触发校验失败。
@@ -107,6 +116,30 @@ SMARTDNS_MK="package/custom/smartdns/Makefile"
 if [ -f "$SMARTDNS_MK" ]; then
 	sed -i -E 's|^(PKG_HASH:=).*|\1skip|; s|^(SMARTDNS_WEBUI_HASH:=).*|\1skip|' "$SMARTDNS_MK"
 	echo "   smartdns: PKG_HASH / SMARTDNS_WEBUI_HASH 已设为 skip"
+fi
+
+# ---------- languard 的 postinst 从「文件」补成「宏」----------
+# 上游把安装后动作写成仓库根目录的 postinst / prerm / postrm 文件，但 OpenWrt 只认
+# Package/<name>/postinst 这种 make 宏——include/package-pack.mk 的 BuildPackVariable
+# 读的是 `ifdef Package/$(1)/$(2)`，文件形式完全不会被读取。后果不是编译失败，而是
+# 装上后服务没被 enable，重启后拦截规则不恢复（状态目录由 rpcd 后端 fs.mkdirr 兜底）。
+# 这里补一个等效宏，插在 include luci.mk 之前：luci.mk 自己的 postinst 有 ifndef 保护，
+# 且它定义在后面会覆盖前面的同名宏，所以必须放在 include 之前。
+LG_MK="package/custom/luci-app-languard/Makefile"
+if [ -f "$LG_MK" ] && ! grep -q 'Package/luci-app-languard/postinst' "$LG_MK"; then
+	awk '/^include \$\(TOPDIR\)\/feeds\/luci\/luci\.mk/ && !ins {
+		print "define Package/luci-app-languard/postinst"
+		print "\tmkdir -p /etc/languard"
+		print "\trm -f /tmp/luci-indexcache.*"
+		print "\trm -rf /tmp/luci-modulecache/"
+		print "\t/etc/init.d/rpcd restart >/dev/null 2>&1"
+		print "\t/etc/init.d/languard enable >/dev/null 2>&1"
+		print "\t/etc/init.d/languard restart >/dev/null 2>&1"
+		print "endef"
+		print ""
+		ins = 1
+	} { print }' "$LG_MK" > "$LG_MK.tmp" && mv "$LG_MK.tmp" "$LG_MK"
+	echo "   languard: 已补 Package/luci-app-languard/postinst 宏"
 fi
 
 # ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
