@@ -67,6 +67,15 @@ clone_pkg diskbox             permails/luci-app-diskbox          master   # luci
 clone_pkg socat-reforged      busybin/luci-app-socat-reforged    main     # luci-app-socat-reforged（socat 端口转发）
 clone_pkg luci-app-vlmcsd     permails/luci-app-vlmcsd           main     # 外层须叫 luci-app-vlmcsd，否则与内嵌 vlmcsd/ 子包同名
 
+# ---------- 设备专属应用（只在对应设备的 config 里启用，其他设备克隆但不选）----------
+# BPI-R4：风扇 PWM 调速。LUCI_DEPENDS 带 @TARGET_mediatek_filogic，
+# 在其他 target 上会被 kconfig 自动隐藏，不会因"未生效"触发校验失败。
+clone_pkg luci-app-fan-bpir4  ntbowen/luci-app-fan-bpir4        main
+# BPI-R4：MediaTek PPE/WED 硬件卸载状态页。仓库根目录没有 Makefile，
+# 包实体在子目录 luci-app-mtk-wed/ 里，buildroot 递归扫描可正常识别，
+# 包名按子目录名推导。
+clone_pkg mtk-wed             z21100644/luci-app-mtk-wed        main
+
 # ---------- 应用管理 / DNS ----------
 clone_pkg openlist2           sbwml/luci-app-openlist2           main     # openlist2 + luci-app-openlist2
 clone_pkg luci-app-adguardhome-tk  w9315273/luci-app-adguardhome  main  # 目录名必须=PKG_NAME：该包声明 CONFLICTS:=luci-app-adguardhome，若克隆到名为 adguardhome 的目录会与官方核心包同名
