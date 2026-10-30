@@ -57,8 +57,55 @@ clone_pkg airconnect          sbwml/luci-app-airconnect          main
 # ---------- zerotier LuCI（rabbitrogi；核心 zerotier 用官方 feeds）----------
 clone_pkg zerotier-luci       rabbitrogi/luci-app-zerotier       main
 
-# ---------- homeproxy（immortalwrt；依赖 +sing-box）----------
-clone_pkg homeproxy           immortalwrt/homeproxy              master
+# ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
+# 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
+# hysteria/shadowsocks 系列/lua-neturl/vmlinux-btf/homeproxy 等 44 个顶层包。
+# 未被 Config 选中的包不会编译，只参与包索引（无副作用）。
+clone_pkg helloworld          sbwml/openwrt_helloworld            v5
+
+# README 配套操作①：删除 feeds 自带的同名核心包（否则 buildroot 收集阶段重复定义直接报错）。
+# 做法：提取 helloworld 内所有 PKG_NAME，逐个在 feeds 源码树 + package/feeds 符号链接里删除同名副本。
+hb_names=$(mktemp)
+find package/custom/helloworld -mindepth 2 -maxdepth 3 -name Makefile 2>/dev/null | while read -r mk; do
+  grep -oE "^PKG_NAME[[:space:]]*:=[[:space:]]*[A-Za-z0-9._+-]+" "$mk" 2>/dev/null | head -1 | sed -E 's/^PKG_NAME[[:space:]]*:=//'
+done | sed '/^$/d' | sort -u > "$hb_names"
+rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}  # README 明确点名的 4 个
+removed=0
+while read -r n; do
+  [ -n "$n" ] || continue
+  # feeds 真实源码目录（net/utils/lang 等任意子层）
+  for d in $(find feeds -maxdepth 3 -mindepth 2 -type d -name "$n" 2>/dev/null); do
+    rm -rf "$d"; removed=$((removed+1))
+  done
+  # scripts/feeds install 建的符号链接
+  for l in $(find package/feeds -maxdepth 2 -name "$n" 2>/dev/null); do
+    rm -rf "$l"; removed=$((removed+1))
+  done
+done < "$hb_names"
+rm -f "$hb_names"
+echo "   README 去重：移除 feeds 中与 helloworld 同名的副本 ${removed} 处"
+
+# README 配套操作②：golang 换成 sbwml 23.x（helloworld 的 Go 核心按该版本构建，官方版本可能编不过）
+if [ -d feeds/packages/lang/golang ]; then
+  rm -rf feeds/packages/lang/golang
+  git clone -q --depth 1 -b 23.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang ||
+    echo "::warning::golang 23.x 换源失败，沿用官方版本"
+  echo "   golang 已切换为 sbwml 23.x"
+fi
+
+# node 换成 sbwml 预编译版（官方 node 从源码编译极慢；sbwml 用 release 预编译产物秒装；
+# 注意：openwrt_helloworld 仓库内并没有 node，node 替换实际来自 sbwml/feeds_packages_lang_node，
+# 路径原地替换，package/feeds/packages/node 符号链接仍指向同一路径无需重建）
+if [ -d feeds/packages/lang/node ]; then
+  rm -rf feeds/packages/lang/node
+  git clone -q --depth 1 -b packages-25.12 https://github.com/sbwml/feeds_packages_lang_node feeds/packages/lang/node ||
+    echo "::warning::sbwml node 换源失败，沿用官方版本"
+  # 原 Makefile 的 PKG_VERSION 是动态拉 tags（CI 瞬断会变空导致构建失败），一次性解析后钉入
+  NODE_VER="$(curl -fsSL --retry 3 --max-time 30 https://api.github.com/repos/sbwml/node_workflow/tags 2>/dev/null | grep '"name"' | head -n 1 | sed -E 's/.*"name": "v([^"]+)".*/\1/' || true)"
+  [ -n "$NODE_VER" ] || NODE_VER="22.23.2"
+  sed -i -E "s|^PKG_VERSION:=.*|PKG_VERSION:=${NODE_VER}|" feeds/packages/lang/node/Makefile
+  echo "   node 已切换为 sbwml 预编译版，版本钉入 ${NODE_VER}"
+fi
 
 # ---------- vlmcsd（permails：根 Makefile 无 PKG_NAME，包名回退=目录名，故目录必须叫 luci-app-vlmcsd，
 #            否则与其内嵌的 vlmcsd/ 子包同名 → buildroot 重复包错误）----------

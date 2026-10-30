@@ -179,9 +179,9 @@ jobs:
           echo "无目录:$nodir"
           echo "被取消:$dropped"
           [ -z "$dropped" ] || echo "::warning::存在被 defconfig 取消选中的包（依赖缺失）:$dropped"
-          # 要求引入的 17 个包全部生效，否则直接失败（避免默默产出缺包固件）
+          # 要求引入的包全部生效，否则直接失败（避免默默产出缺包固件）
           lost=0
-          for want in luci-app-homeproxy luci-app-natmapt stuntman-client luci-app-mosdns \
+          for want in luci-app-natmapt stuntman-client luci-app-mosdns \
             luci-app-bandix luci-app-unblockneteasemusic luci-app-wechatpush luci-app-taskplan \
             luci-app-timecontrol luci-app-netspeedtest luci-app-watchdog luci-app-partexp \
             luci-app-airconnect luci-app-zerotier luci-app-vlmcsd; do
