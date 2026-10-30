@@ -82,6 +82,20 @@ clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外�
 WOLMON_MK="package/custom/wolmon/src/luci-app-wolmon/Makefile"
 [ -f "$WOLMON_MK" ] && sed -i 's|^include ../../luci.mk$|include $(TOPDIR)/feeds/luci/luci.mk|' "$WOLMON_MK"
 
+# ---------- adguardhome(tk) Makefile 修补 ----------
+# 1) PKG_BUILD_DEPENDS:=luci-base/host 指向一个不存在的 host 变体。buildroot 生成包
+#    元数据时会把整个 Makefile 跳过，表现为 tmp/.config-package.in 里完全没有
+#    PACKAGE_luci-app-adguardhome-tk（连它的 i18n 子包也没有），defconfig 无从选中。
+# 2) PROVIDES 与 CONFLICTS 写成同一个名字（luci-app-adguardhome）构成自冲突。
+#    官方副本已在上面显式删除，这里只保留 PROVIDES。
+AGH_MK="package/custom/adguardhome/Makefile"
+if [ -f "$AGH_MK" ]; then
+	sed -i '/^PKG_BUILD_DEPENDS:=luci-base\/host/d' "$AGH_MK"
+	sed -i 's|^[[:space:]]*CONFLICTS:=luci-app-adguardhome$|	CONFLICTS:=|' "$AGH_MK"
+	sed -i 's|^[[:space:]]*CONFLICTS:=luci-i18n-adguardhome-zh-cn$|	CONFLICTS:=|' "$AGH_MK"
+	echo "   adguardhome: 已移除无效的 luci-base/host 构建依赖与自冲突 CONFLICTS"
+fi
+
 # ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 # 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
 # hysteria/shadowsocks 系列/lua-neturl/vmlinux-btf/homeproxy 等 44 个顶层包。
