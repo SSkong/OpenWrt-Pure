@@ -75,6 +75,9 @@ clone_pkg luci-app-cloudflarespeedtest  stevenjoezhang/luci-app-cloudflarespeedt
 # languard：LAN 侧访问控制，纯 shell + nft 规则集（会在 /etc/nftables.d/ 落 90-languard.nft），
 # 依赖 firewall4 / nftables / bash / coreutils，均为官方 feeds 包。
 clone_pkg luci-app-languard             rheatin/luci-app-languard                    main
+# apbridge：跨子网访问 AP / 光猫（本项目自研，见 README「自研插件」一节）。
+# 纯 JS 前端 + rpcd ucode 后端 + shell 做 uci 手术，LUCI_PKGARCH=all，无编译产物。
+clone_pkg luci-app-apbridge             SSkong/luci-app-apbridge                     main
 
 # ---------- 设备专属应用（只在对应设备的 config 里启用，其他设备克隆但不选）----------
 # BPI-R4：风扇 PWM 调速。LUCI_DEPENDS 带 @TARGET_mediatek_filogic，

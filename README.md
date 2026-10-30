@@ -76,6 +76,17 @@ nft list ruleset | grep fullcone        # 规则是否生成
 
 按 helloworld README 的配套操作：feeds 自带的 `xray-core/v2ray-core/v2ray-geodata/sing-box` 等同名核心已自动移除（由 helloworld 版本接管）；`lang/golang` 换 sbwml `27.x`；`lang/node` 换 sbwml 预编译版。最后一步统一删除 feeds 中与 `package/custom` 同名的副本，避免 buildroot 重复定义。
 
+### 自研插件：luci-app-apbridge
+
+`SSkong/luci-app-apbridge` —— 跨子网访问 AP / 光猫。上游同类插件是 `zyqfork/luci-app-ap-modem`，本插件重写了实现：
+
+- **不抓页面**。它解决的是三层可达性：在目标设备所在子网里占用一个空闲地址，LAN 侧用 veth 对把这段地址从 `br-lan` 的三层接口上摘出去，再连同 WAN 侧通道一起丢进 wan 防火墙区域做 masquerade。目标设备看到的源地址在它自己的网段里，因此不需要它有任何回程路由。
+- **多条通道**走 `form.GridSection`，不再固定只有 LAN / WAN 两个框；冲突检测在脚本里（与回环、LAN 网段、其它通道比较），界面上以「未创建」直接体现。
+- 前端 JS + 后端 `/usr/share/rpcd/ucode/luci.apbridge`，状态面板 5 秒轮询，支持 ping/HTTP 连通性测试与跳转。
+- 依赖只有 `rpcd-mod-ucode` / `firewall4`，无编译产物，构建开销可忽略。刻意不依赖 `ip-tiny`（与 `ip-full` 冲突）。
+
+`Scripts/Packages.sh` 里对应一行 `clone_pkg luci-app-apbridge SSkong/luci-app-apbridge main`，`Config/base.config` 里启用 `CONFIG_PACKAGE_luci-app-apbridge=y`。
+
 ### 为什么不设 `CONFIG_ALL_KMODS`
 
 它的语义是 *Select all kernel module packages by default* —— 会把官方树里每一个 kmod 都编译进去。这是之前 X86 要 2.5h、H68K 逼近 6h 上限的主因。
