@@ -141,6 +141,13 @@ Patches/h68k/          # H68K 两个补丁
 编译通过只说明代码能跑完，不代表固件能启动。按这个顺序看：
 
 1. **构建摘要里没有 `✗ 未生效`** —— 流程会打印请求包数、无源码目录的包、被 defconfig 取消选中的包；`luci-app-*` / `luci-theme-*` / `kmod-*` 有丢失会直接判失败。
+   这段逻辑在 `Scripts/VerifyPackages.sh`，可以脱离 CI 单独跑（生成 `.config` 之后、`make download` 之前）：
+
+   ```bash
+   bash Scripts/VerifyPackages.sh openwrt x86
+   ```
+
+   退出码 0 全部生效 / 1 有关键包没进 `.config` / 2 前置文件缺失。它会把未生效包的 `depends on` 段落打印出来，并标出哪个依赖符号没启用——包括 `!PACKAGE_x` 这种否定依赖（方向是反的，x 未启用才算满足）。
 2. **产物非空且带 `*.manifest`** —— manifest 是已装包清单，用 `grep` 直接确认某个包到底进没进固件，比看目录结构可靠。
 3. **`sha256sums.txt` 与镜像同目录** —— 下载后先校验，排除传输损坏。
 4. **设备侧验证**：X86 可直接在 PVE/Libvirt 里起虚拟机看能否进系统；BPI-R4 用 `sdcard.img.gz` 写 TF 卡启动；H68K 刷完先看 `dmesg | grep -E "fw-d54d0eb|p3phy"` 与 `ip -br link`，确认 PHY 补丁生效、eth2/eth3 在不在。
