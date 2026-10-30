@@ -137,6 +137,7 @@ jobs:
           make defconfig
 
       - name: 恢复编译缓存
+        id: cache
         uses: actions/cache@v4
         with:
           path: |
@@ -145,6 +146,38 @@ jobs:
           key: ${{ matrix.name }}-${{ env.SRC_HASH }}
           restore-keys: |
             ${{ matrix.name }}-
+
+      - name: 激活缓存的工具链
+        # 缓存恢复后必须刷新 stamp 时间戳，否则 make 认为 host/工具链未安装而重编
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: |
+          find openwrt/staging_dir -type d -name stamp -not -path "*target*" \
+            -exec find {} -type f -exec touch {} + \;
+          echo "工具链缓存已激活"
+
+      - name: 校验配置与包是否存在
+        run: |
+          cd openwrt
+          make defconfig > /dev/null 2>&1 || true
+          # 找出配置里选中、但源码树中不存在同名目录的包（虚拟包/子选项除外，它们不报错只被忽略）
+          missing=""
+          while read -r pkg; do
+            [ -z "$pkg" ] && continue
+            case "$pkg" in *_INCLUDE_*|*WITH_*) continue ;; esac
+            if ! find package feeds -maxdepth 6 -type d -name "$pkg" 2>/dev/null | grep -q .; then
+              missing="$missing $pkg"
+            fi
+          done < <(grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9._-]+=y' .config | sed 's/^CONFIG_PACKAGE_//;s/=y$//')
+          n=$(echo "$missing" | wc -w)
+          {
+            echo "### 配置项校验（${{ matrix.name }}）：${n} 个选中包在源码中无对应目录（会被忽略）"
+            if [ "$n" -gt 0 ]; then
+              echo '```'
+              echo "$missing" | tr ' ' '\n' | sed '/^$/d' | sort
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "无对应目录的选中包数：$n"
 
       - name: 下载源码包
         run: |
