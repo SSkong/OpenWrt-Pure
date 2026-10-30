@@ -1,0 +1,203 @@
+name: Build OpenWrt
+
+# 纯净 OpenWrt 源码编译：官方 25.12 + 自定义软件包
+# 设备：X86 (x86/64) / BPI-R4 (mediatek-filogic) / H68K (rockchip-armv8，需设备 backport)
+# 内核：除 H68K 设备支持补丁外不做任何改动
+
+on:
+  workflow_dispatch:
+    inputs:
+      devices:
+        description: "设备（逗号分隔：x86,bpi-r4,h68k；留空=全部）"
+        required: false
+        type: string
+        default: ""
+      version:
+        description: "OpenWrt 版本（如 25.12.6；留空=最新 25.12.x）"
+        required: false
+        type: string
+        default: ""
+      publish:
+        description: "构建完成后发布到 Release"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    name: 解析版本与设备矩阵
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: 解析 OpenWrt 版本
+        id: v
+        run: |
+          req="${{ inputs.version }}"
+          [ -n "$req" ] || req="25.12"
+          if [[ "$req" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            ver="$req"
+          else
+            ver=$(curl -fsSL --retry 3 https://downloads.openwrt.org/releases/ \
+              | grep -oE 'href="[0-9]+\.[0-9]+\.[0-9]+/"' | sed 's/href="//;s#/##;s/"//' \
+              | grep -E "^${req//./\\.}\." | sort -V | tail -n 1)
+          fi
+          [ -n "$ver" ] || { echo "ERROR: 无法解析版本 $req" >&2; exit 1; }
+          echo "使用 OpenWrt v${ver}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - name: 生成设备矩阵
+        id: m
+        run: |
+          all='[
+            {"name":"x86","label":"X86","target":"x86/64","profile":"generic"},
+            {"name":"bpi-r4","label":"BPI-R4","target":"mediatek/filogic","profile":"bananapi_bpi-r4"},
+            {"name":"h68k","label":"H68K","target":"rockchip/armv8","profile":"hinlink_h68k"}
+          ]'
+          sel="${{ inputs.devices }}"
+          sel=$(echo "$sel" | tr 'A-Z' 'a-z' | tr '，' ',' | tr -d ' ')
+          if [ -z "$sel" ]; then
+            echo "matrix=$(echo "$all" | jq -c '{include:.}')" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix=$(echo "$all" | jq -c --arg s "$sel" '{include:[.[]|select(.name as $n | ($s|split(",")|index($n)))]}')" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: ${{ matrix.label }}
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+
+    steps:
+      - name: 检出本仓库
+        uses: actions/checkout@v4
+
+      - name: 清理磁盘
+        uses: smallprogram/maximize-build-space@16007771e4642069097fc3e7444638474e5db178
+        with:
+          root-reserve-mb: 5120
+          temp-reserve-mb: 4096
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+
+      - name: 安装编译依赖
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          printf 'tries = 5\nwaitretry = 5\ntimeout = 30\nretry-connrefused = on\n' > ~/.wgetrc
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y --no-install-recommends \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar file flex \
+            g++-multilib gawk gcc-multilib genisoimage gettext git help2man intltool \
+            libelf-dev libncurses-dev libssl-dev libtool libxml-parser-perl lld \
+            llvm make ncurses-term ninja-build patch pkg-config python3 python3-dev \
+            python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools \
+            subversion swig time uglifyjs unzip upx-ucl wget xz-utils zip zlib1g-dev zstd
+
+      - name: 克隆 OpenWrt 源码（官方）
+        run: |
+          git clone -q --depth 1 -b "v${{ needs.setup.outputs.version }}" \
+            https://github.com/openwrt/openwrt.git openwrt
+          cd openwrt
+          echo "源码 commit: $(git rev-parse --short HEAD)"
+          echo "SRC_HASH=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: H68K 设备支持补丁
+        if: matrix.name == 'h68k'
+        run: ./Scripts/H68K.sh openwrt "$PWD/Patches/h68k"
+
+      - name: 更新 feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 引入自定义软件包
+        run: ./Scripts/Packages.sh openwrt
+
+      - name: 应用配置
+        run: |
+          cd openwrt
+          cat ../Config/base.config "../Config/${{ matrix.name }}.config" > .config
+          ../Scripts/Settings.sh . "${{ matrix.name }}"
+          make defconfig
+
+      - name: 恢复编译缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
+          key: ${{ matrix.name }}-${{ env.SRC_HASH }}
+          restore-keys: |
+            ${{ matrix.name }}-
+
+      - name: 下载源码包
+        run: |
+          cd openwrt
+          make download -j16 || true
+          dl=$(make download -j1 2>&1 | grep -c "^ERROR" || true)
+          [ "$dl" -gt 0 ] && echo "::warning::存在 ${dl} 个下载失败项，编译期会重试" || echo "下载完成"
+
+      - name: 编译
+        run: |
+          cd openwrt
+          make -j$(nproc) || {
+            echo "::warning::并行编译失败，转单线程定位错误"
+            timeout 1800 make -j1 V=s 2>&1 | tail -200
+            exit 1
+          }
+
+      - name: 收集产物
+        id: art
+        run: |
+          ver="${{ needs.setup.outputs.version }}"
+          date=$(date -u +%Y-%m-%d)
+          out="artifact/${{ matrix.name }}"
+          mkdir -p "$out"
+          src="openwrt/bin/targets/${{ matrix.target }}"
+          find "$src" -maxdepth 1 -type f \( -name "*.img.gz" -o -name "*.itb" -o -name "*efi.img.gz" \) \
+            -exec cp -f {} "$out/" \;
+          # x86/BPI-R4 的 factory/preloader 等引导件（如有）
+          find "$src" -maxdepth 1 -type f \( -name "*preloader*.bin" -o -name "*fip*.bin" -o -name "*gpt*.bin" \) \
+            -exec cp -f {} "$out/" \;
+          cd "$out"
+          rm -f *.sha256
+          ls -lh
+          sha256sum * > "../${{ matrix.name }}-${ver}-${date}.sha256"
+          echo "files=$(ls | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          [ -n "$(ls -A)" ] || { echo "ERROR: 未找到任何固件产物" >&2; exit 1; }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ matrix.name }}-${{ needs.setup.outputs.version }}
+          path: artifact/${{ matrix.name }}/*
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: 发布到 Release
+        if: inputs.publish
+        uses: ncipollo/release-action@v1
+        with:
+          name: OpenWrt ${{ needs.setup.outputs.version }}
+          tag: v${{ needs.setup.outputs.version }}
+          commit: ${{ github.sha }}
+          allowUpdates: true
+          replacesArtifacts: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: artifact/${{ matrix.name }}/*
