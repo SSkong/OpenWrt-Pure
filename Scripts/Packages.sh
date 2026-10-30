@@ -91,6 +91,8 @@ if [ -d feeds/packages/lang/golang ]; then
   git clone -q --depth 1 -b 23.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang ||
     echo "::warning::golang 23.x 换源失败，沿用官方版本"
   echo "   golang 已切换为 sbwml 23.x"
+  # lang/golang 目录重建后，此前 scripts/feeds install -a 建的符号链接全部悬空，需重建
+  ./scripts/feeds install -a >/dev/null 2>&1 || true
 fi
 
 # node 换成 sbwml 预编译版（官方 node 从源码编译极慢；sbwml 用 release 预编译产物秒装；
@@ -104,6 +106,8 @@ if [ -d feeds/packages/lang/node ]; then
   NODE_VER="$(curl -fsSL --retry 3 --max-time 30 https://api.github.com/repos/sbwml/node_workflow/tags 2>/dev/null | grep '"name"' | head -n 1 | sed -E 's/.*"name": "v([^"]+)".*/\1/' || true)"
   [ -n "$NODE_VER" ] || NODE_VER="22.23.2"
   sed -i -E "s|^PKG_VERSION:=.*|PKG_VERSION:=${NODE_VER}|" feeds/packages/lang/node/Makefile
+  # 注意：不要替换 $(ARCH_PACKAGES)！它在三目标上本就展开为正确资产名
+  # （x86→x86_64、BPI-R4→aarch64_cortex-a53、H68K→aarch64_generic），硬编码会串架构
   echo "   node 已切换为 sbwml 预编译版，版本钉入 ${NODE_VER}"
 fi
 
