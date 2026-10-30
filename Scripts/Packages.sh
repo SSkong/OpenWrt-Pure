@@ -82,6 +82,10 @@ clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外�
 WOLMON_MK="package/custom/wolmon/src/luci-app-wolmon/Makefile"
 [ -f "$WOLMON_MK" ] && sed -i 's|^include ../../luci.mk$|include $(TOPDIR)/feeds/luci/luci.mk|' "$WOLMON_MK"
 
+# ---------- adguardhome-tk 依赖修正（25.12 中 rpcd 内置 ucode，无独立的 rpcd-mod-ucode 包）----------
+AGH_MK="package/custom/adguardhome/Makefile"
+[ -f "$AGH_MK" ] && sed -i 's|+rpcd-mod-ucode ||g; s|+rpcd-mod-ucode||g' "$AGH_MK"
+
 # ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 # 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
 # hysteria/shadowsocks 系列/lua-neturl/vmlinux-btf/homeproxy 等 44 个顶层包。
