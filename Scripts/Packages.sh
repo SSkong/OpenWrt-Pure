@@ -123,8 +123,10 @@ hb_names=$(mktemp)
 find package/custom -mindepth 2 -name Makefile 2>/dev/null | while read -r mk; do
   n=$(grep -oE "^PKG_NAME[[:space:]]*:=[[:space:]]*[A-Za-z0-9._+-]+" "$mk" 2>/dev/null | head -1 | sed -E 's/^PKG_NAME[[:space:]]*:=//')
   if [ -n "$n" ]; then echo "$n"; else echo "$mk" | sed -E 's#package/custom/([^/]+)/.*#\1#'; fi
-  grep -oE "^CONFLICTS[[:space:]]*:=[[:space:]]*.*" "$mk" 2>/dev/null \
-    | sed -E 's/^CONFLICTS[[:space:]]*:=[[:space:]]*//' | tr -s ' ' '\n' | grep -E '^[A-Za-z0-9._+-]+$'
+  # CONFLICTS 多在 define Package/... 块内、行首为 TAB 缩进，故用 [[:space:]]* 而非 ^
+  grep -E "^[[:space:]]*CONFLICTS[[:space:]]*:=" "$mk" 2>/dev/null \
+    | sed -E 's/^[[:space:]]*CONFLICTS[[:space:]]*:=[[:space:]]*//' \
+    | tr -s '[:space:]' '\n' | grep -E '^[A-Za-z0-9._+-]+$'
 done | sed '/^$/d' | sort -u > "$hb_names"
 # README 明确点名的 4 个先行删除（保险）
 rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}
