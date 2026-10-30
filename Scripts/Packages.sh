@@ -96,6 +96,19 @@ clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外�
 WOLMON_MK="package/custom/wolmon/src/luci-app-wolmon/Makefile"
 [ -f "$WOLMON_MK" ] && sed -i 's|^include ../../luci.mk$|include $(TOPDIR)/feeds/luci/luci.mk|' "$WOLMON_MK"
 
+# ---------- smartdns 源码校验：改为 skip ----------
+# 上游 Makefile 钉死了 PKG_SOURCE_VERSION 对应的 tar.gz sha256，而 codeload 对同一
+# commit 打包出的 tarball 并不保证字节级稳定（gzip 头含时间戳等），重打包即校验失败；
+# 它还会固定 smartdns-webui 的 hash，同样的问题。
+# OpenWrt 的 scripts/download.pl 明确支持 "skip"：hash_cmd() 按 hash 长度判断算法，
+# "skip" 长度为 4 使 hash_cmd 返回空，随后 `$hash_cmd or ($file_hash eq "skip")` 放行，
+# 后续校验都包在 if ($hash_cmd) 里，为空即整段跳过。
+SMARTDNS_MK="package/custom/smartdns/Makefile"
+if [ -f "$SMARTDNS_MK" ]; then
+	sed -i -E 's|^(PKG_HASH:=).*|\1skip|; s|^(SMARTDNS_WEBUI_HASH:=).*|\1skip|' "$SMARTDNS_MK"
+	echo "   smartdns: PKG_HASH / SMARTDNS_WEBUI_HASH 已设为 skip"
+fi
+
 # ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 # 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
 # hysteria/shadowsocks 系列/lua-neturl/vmlinux-btf/homeproxy 等 44 个顶层包。
