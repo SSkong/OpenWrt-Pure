@@ -118,7 +118,7 @@ jobs:
 
       - name: H68K 设备支持补丁
         if: matrix.name == 'h68k'
-        run: ./Scripts/H68K.sh openwrt "$PWD/Patches/h68k"
+        run: bash Scripts/H68K.sh openwrt "$PWD/Patches/h68k"
 
       - name: 更新 feeds
         run: |
@@ -127,13 +127,13 @@ jobs:
           ./scripts/feeds install -a
 
       - name: 引入自定义软件包
-        run: ./Scripts/Packages.sh openwrt
+        run: bash Scripts/Packages.sh openwrt
 
       - name: 应用配置
         run: |
           cd openwrt
           cat ../Config/base.config "../Config/${{ matrix.name }}.config" > .config
-          ../Scripts/Settings.sh . "${{ matrix.name }}"
+          bash ../Scripts/Settings.sh . "${{ matrix.name }}"
           make defconfig
 
       - name: 恢复编译缓存
