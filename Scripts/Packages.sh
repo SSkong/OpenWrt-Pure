@@ -31,6 +31,11 @@ clone_pkg stuntman            muink/openwrt-stuntman             master   # stun
 
 # ---------- DNS / 分流核心 ----------
 clone_pkg mosdns              sbwml/luci-app-mosdns              v5       # mosdns + geo2txt + luci-app-mosdns
+# smartdns 用 pymumu 上游原版替换 feeds 自带版本（feeds/packages/net/smartdns 与本仓库同名，
+# 由文件末尾的通用去重逻辑删除）。核心包无条件 include feeds 的 rust-package.mk，
+# 依赖 feeds 里 rust 包存在；其 rust 子包 smartdns-ui 未设 DEFAULT，默认不选，不会拉 rust/host。
+clone_pkg smartdns            pymumu/openwrt-smartdns            master   # 核心（含可选子包 smartdns-ui）
+clone_pkg luci-app-smartdns   pymumu/luci-app-smartdns           master   # LuCI 前端
 
 # ---------- 带宽 / 穿透 / 组网 ----------
 clone_pkg bandix              timsaya/openwrt-bandix             main     # PKG_NAME=bandix
