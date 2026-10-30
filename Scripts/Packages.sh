@@ -126,6 +126,19 @@ find package/custom -mindepth 2 -name Makefile 2>/dev/null | while read -r mk; d
 done | sed '/^$/d' | sort -u > "$hb_names"
 # README 明确点名的 4 个先行删除（保险）
 rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}
+
+# adguardhome-tk 与官方 luci-app-adguardhome 互斥，必须删官方副本。
+# tk 变体声明 CONFLICTS:=luci-app-adguardhome，kconfig 里变成
+# "depends on !PACKAGE_luci-app-adguardhome"；而官方 luci 合集里那个包默认 =y，
+# 条件不成立 → tk 变体被 defconfig 静默取消（表现为 .config-package.in 里根本
+# 没有 PACKAGE_luci-app-adguardhome-tk 条目）。
+# 下面的通用去重按 PKG_NAME 匹配，而 tk 的 PKG_NAME 是 luci-app-adguardhome-tk，
+# 匹配不到官方目录名，所以这里必须显式删。
+for _p in luci-app-adguardhome luci-i18n-adguardhome-zh-cn; do
+	find feeds -maxdepth 4 -mindepth 2 -type d -name "$_p" -exec rm -rf {} + 2>/dev/null || true
+	find package/feeds -maxdepth 2 -name "$_p" -exec rm -rf {} + 2>/dev/null || true
+done
+
 removed=0
 while read -r n; do
   [ -n "$n" ] || continue
