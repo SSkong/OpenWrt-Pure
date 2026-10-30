@@ -197,7 +197,19 @@ jobs:
               echo "$fin" | grep -qx "$w" && continue
               start=$(grep -n "^config PACKAGE_${w}\$" tmp/.config-package.in | head -1 | cut -d: -f1)
               if [ -z "$start" ]; then
-                echo "  [$w] 未在 tmp/.config-package.in 中出现（源码 Makefile 未被 buildroot 收集或包名与目录不符）"
+                echo "  [$w] 未在 tmp/.config-package.in 中出现 → 直接取证源码树："
+                hit=$(grep -rl "Package/$w" package --include=Makefile 2>/dev/null | head -5)
+                [ -n "$hit" ] && echo "    定义 Package/$w 的 Makefile: $(echo "$hit" | tr '\n' ' ')" \
+                  || echo "    ⚠ package 树中无任何 Makefile 定义 Package/$w（扫描失败或包名不符）"
+                d=$(find package -type d -name "$w" 2>/dev/null | head -1)
+                [ -n "$d" ] && { echo "    包目录: $d"; echo "    其 Makefile PKG_NAME: $(grep -h '^PKG_NAME' "$d/Makefile" 2>/dev/null | head -1)"; }
+                echo "    索引中含该包名片段的符号行："
+                tok=$(echo "$w" | sed -E 's/^luci-app-//;s/^luci-theme-//;s/-tk$//')
+                grep -n "$tok" tmp/.config-package.in 2>/dev/null | head -15 | sed 's/^/      /'
+                echo "    扫描阶段针对该目录的报错（若有）："
+                d2=$(find package -maxdepth 2 -type d -name adguardhome 2>/dev/null | head -1)
+                [ -n "$d2" ] && { echo "      源码目录: $d2"; ls -1 "$d2" 2>/dev/null | head -10 | sed 's/^/        /'; \
+                  make -s "${d2#/}/scan" 2>&1 | head -20 | sed 's/^/        /'; }
                 continue
               fi
               end=$(( start + 30 ))
