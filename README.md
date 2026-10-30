@@ -15,9 +15,45 @@
 1. `Patches/h68k/h68k-backport.patch` — 移植 OpenWrt PR#21270：U-Boot 目标、设备树、镜像布局、board.d 网口/指示灯、网卡中断亲和性
 2. `Patches/h68k/105-phy-rockchip-snps-pcie3-sram-firmware.patch` — RK3568 PCIe3 PHY 内部 SRAM 固件手动上传。2022 旧版 H68K 上该 SRAM 自动加载永不完成（`p3phy lock failed` → `probe -110`），导致 **eth2/eth3（RTL8125B 2.5G）不出现**；此补丁绕过该硬件批次缺陷
 
-除此之外**不加任何内核补丁**：没有 BBRv3、没有 LRNG、没有 fullcone 内核 hack、没有 BTF 注入、没有调度器/网络栈魔改。
+除此之外内核只多打一套 **SONiC fullcone NAT** 补丁（见下节）：没有 BBRv3、没有 LRNG、没有 BTF 注入、没有调度器/网络栈魔改。
 
 `Scripts/H68K.sh` 对补丁落地做了三重校验：内核版本必须是 6.12（补丁路径写死在 `patches-6.12`）、`fuzz=0` 优先应用、应用后确认 `.rej` 无残留且设备定义真的进了 `armv8.mk`。
+
+### 全锥形 NAT（SONiC fullcone）
+
+官方 25.12 已移除 `kmod-nft-fullcone`，所以 `base.config` 里没有它。全锥形改由 `Scripts/Fullcone.sh` 打 9 个补丁实现（`Patches/fullcone/`）：
+
+| 层 | 补丁 | 落到哪 |
+|---|---|---|
+| 内核 | 984 / 985 / 986 | `target/linux/generic/hack-6.12/` |
+| iptables | 901 | `package/network/utils/iptables/patches/` |
+| libnftnl | 001 | `package/libs/libnftnl/patches/` |
+| nftables | 002 | `package/network/utils/nftables/patches/` |
+| fw4 / fw3 | 001 各一个 | `package/network/config/firewall4|firewall/patches/` |
+| LuCI | 001 | `feeds/luci/applications/luci-app-firewall/patches/` |
+
+要点：
+
+- **不产生新内核模块、不需要任何 `CONFIG_*`**。fullcone 表达式直接编进 `nf_nat` / `xt_MASQUERADE` / `nft_masq`，所以固件里不用装额外 kmod，也不存在“编了但没加载”的情况
+- **必须晚于 `feeds install`**：LuCI 补丁要落到 feeds 目录下；**必须早于 `make download`**：`libnftnl` 补丁改了 `src/Makefile.am`，脚本会同时注入 `PKG_FIXUP:=autoreconf`，否则 automake 版本对不上会直接报 `automake-1.17: not found`
+- 与旧 `nft-fullcone` 的区别：映射存在 conntrack 自身（第二张 3-tuple 哈希表，RCU 读路径），支持全部 L4 协议，per-rule 标志位——不走 fullcone 的流量零额外开销
+- 启用要两步：`defaults.fullcone` 是总开关（默认关，关着时 zone 里的设置无效），再给 wan zone 单独开
+
+`Scripts/Fullcone.sh` 的守卫：内核必须是 6.12 且 `hack-6.12` 存在、补丁必须是 LF（CRLF 会静默打不上）、feeds 必须已安装、落地后逐个校验文件非空与 `PKG_FIXUP` 是否注入。重复执行幂等。
+
+刷机后：
+
+```bash
+uci set firewall.@defaults[0].fullcone='1'
+uci set firewall.@zone[1].fullcone='1'
+uci add_list firewall.@zone[1].fullcone_proto='udp'   # 可选，仅 UDP（游戏/P2P 推荐）
+uci commit firewall && /etc/init.d/firewall restart
+
+nft list ruleset | grep fullcone        # 规则是否生成
+# 内网机器跑 pystun3，结果应为 Full Cone
+```
+
+注意：SNAT 规则必须带端口范围（fw4 生成的会自动带 `to :1024-65535`）。不带范围时 3-tuple 唯一性保证不生效，两台内网主机可能拿到同一个外部端口，先建立映射的那台就丢了该端口的入站可达性——这正是全锥要避免的。
 
 ## 自定义软件包
 

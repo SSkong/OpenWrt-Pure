@@ -129,6 +129,11 @@ jobs:
       - name: 引入自定义软件包
         run: bash Scripts/Packages.sh openwrt
 
+      - name: SONiC fullcone NAT 补丁
+        # 必须晚于 feeds install（LuCI 补丁要落到 feeds/luci/applications/luci-app-firewall/），
+        # 且早于 make download（libnftnl 补丁要带上 PKG_FIXUP:=autoreconf 重新生成构建系统）
+        run: bash Scripts/Fullcone.sh openwrt "$PWD/Patches/fullcone"
+
       - name: 应用配置
         run: |
           cd openwrt
