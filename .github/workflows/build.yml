@@ -179,16 +179,18 @@ jobs:
           echo "无目录:$nodir"
           echo "被取消:$dropped"
           [ -z "$dropped" ] || echo "::warning::存在被 defconfig 取消选中的包（依赖缺失）:$dropped"
-          # 要求引入的包全部生效，否则直接失败（避免默默产出缺包固件）
-          lost=0
-          for want in luci-app-natmapt stuntman-client luci-app-mosdns \
-            luci-app-bandix luci-app-unblockneteasemusic luci-app-wechatpush luci-app-taskplan \
-            luci-app-timecontrol luci-app-netspeedtest luci-app-watchdog luci-app-partexp \
-            luci-app-airconnect luci-app-zerotier luci-app-vlmcsd; do
-            echo "$fin" | grep -qx "$want" || { echo "✗ 未生效: $want"; lost=$((lost+1)); }
+          # 要求引入的功能包/主题/autocore 变体全部生效，否则直接失败（避免默默产出缺包固件）。
+          # want 从 .config.requested 自动提取（luci-app-* / luci-theme-* / stuntman-client / autocore-*），
+          # 与 base.config、设备 config 始终同步，不会因加包而漏改本清单。
+          lost=0; total=0
+          mapfile -t want < <(grep -oE '^CONFIG_PACKAGE_(luci-app-[A-Za-z0-9._+-]+|luci-theme-[A-Za-z0-9._+-]+|stuntman-client|autocore-(arm|x86))=y' .config.requested \
+            | sed 's/^CONFIG_PACKAGE_//;s/=y$//' | sort -u)
+          for w in "${want[@]}"; do
+            total=$((total+1))
+            echo "$fin" | grep -qx "$w" || { echo "✗ 未生效: $w"; lost=$((lost+1)); }
           done
-          [ "$lost" = "0" ] || { echo "ERROR: $lost 个指定包未能生效"; exit 1; }
-          echo "✅ 15 个指定包全部选中生效"
+          [ "$lost" = "0" ] || { echo "ERROR: $lost/$total 个指定包未能生效"; exit 1; }
+          echo "✅ ${total} 个指定功能包全部选中生效"
 
       - name: 下载源码包
         run: |

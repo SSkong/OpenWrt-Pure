@@ -24,38 +24,63 @@ clone_pkg() {
 	rm -rf "package/custom/${name}/.github" "package/custom/${name}/.git"
 }
 
-# ---------- natmapt（muink）：核心 + LuCI ----------
-clone_pkg natmapt             muink/openwrt-natmapt              master  # PKG_NAME=natmapt
+# ---------- NAT 维护 / P2P（muink）----------
+clone_pkg natmapt             muink/openwrt-natmapt              master
 clone_pkg luci-app-natmapt    muink/luci-app-natmapt             master
+clone_pkg stuntman            muink/openwrt-stuntman             master   # stuntman-client/-server
 
-# ---------- stuntman（muink，natmapt 依赖的 STUN 客户端/服务端）----------
-clone_pkg stuntman            muink/openwrt-stuntman             master  # stuntman-client/-server/-testcode
+# ---------- DNS / 分流核心 ----------
+clone_pkg mosdns              sbwml/luci-app-mosdns              v5       # mosdns + geo2txt + luci-app-mosdns
 
-# ---------- mosdns（sbwml：核心 + geo2txt + LuCI 同仓）----------
-clone_pkg mosdns              sbwml/luci-app-mosdns              v5
-
-# ---------- bandix（timsaya：核心 + LuCI 分仓）----------
-clone_pkg bandix              timsaya/openwrt-bandix             main    # PKG_NAME=bandix
+# ---------- 带宽 / 穿透 / 组网 ----------
+clone_pkg bandix              timsaya/openwrt-bandix             main     # PKG_NAME=bandix
 clone_pkg luci-app-bandix     timsaya/luci-app-bandix            main
+clone_pkg easytier            EasyTier/luci-app-easytier         main     # easytier + easytier-noweb + luci-app-easytier
+clone_pkg honk                189160/luci-app-honk               main     # honk + luci-app-honk
+clone_pkg zerotier-luci       rabbitrogi/luci-app-zerotier       main     # 核心 zerotier 用官方 feeds
 
-# ---------- 网易云音乐解锁（UnblockNeteaseMusic 官方）----------
+# ---------- 媒体 / 推送 / DNS 工具 ----------
 clone_pkg unblockneteasemusic UnblockNeteaseMusic/luci-app-unblockneteasemusic js
-
-# ---------- 微信推送（tty228）----------
 clone_pkg wechatpush          tty228/luci-app-wechatpush         master
+clone_pkg airconnect          sbwml/luci-app-airconnect          main     # luci-app-airconnect + airconnect
+clone_pkg oxidns              hahaher123/luci-app-oxidns         main     # luci-app-oxidns
+clone_pkg kixdns              JohnsonRan/luci-app-kixdns         main     # kixdns(Rust) + kixdns-stats + luci-app-kixdns
 
-# ---------- sirpdboy 系列（taskplan / timecontrol / netspeedtest / watchdog / partexp）----------
-clone_pkg taskplan            sirpdboy/luci-app-taskplan         main
-clone_pkg timecontrol         sirpdboy/luci-app-timecontrol      main    # luci-app-timecontrol（nft 定时控制）
-clone_pkg netspeedtest        sirpdboy/netspeedtest              main    # luci-app-netspeedtest + ookla-speedtest + homebox
-clone_pkg watchdog            sirpdboy/luci-app-watchdog         main    # luci-app-watchdog + watchdog
-clone_pkg partexp             sirpdboy/luci-app-partexp          main    # luci-app-partexp（分区扩容）
+# ---------- 任务 / 定时 / 磁盘 / 看门狗 / 分区（sirpdboy & Arthur97172）----------
+clone_pkg taskplan            sirpdboy/luci-app-taskplan         main     # luci-app-taskplan
+clone_pkg timecontrol         sirpdboy/luci-app-timecontrol      main     # luci-app-timecontrol（nft 定时控制）
+clone_pkg tasks               Arthur97172/luci-app-tasks         main     # luci-app-tasks（定时/开机/上网控制）
+clone_pkg netspeedtest        sirpdboy/netspeedtest              main     # luci-app-netspeedtest + ookla-speedtest + homebox
+clone_pkg watchdog            sirpdboy/luci-app-watchdog         main     # luci-app-watchdog + watchdog
+clone_pkg partexp             sirpdboy/luci-app-partexp          main     # luci-app-partexp（分区扩容）
+clone_pkg online-upgrade      Arthur97172/luci-app-online-upgrade main
+clone_pkg substore            Arthur97172/luci-app-substore      main     # 依赖 luci-lua-runtime + luci-compat
 
-# ---------- airconnect（sbwml：airconnect 核心 + LuCI 同仓）----------
-clone_pkg airconnect          sbwml/luci-app-airconnect          main
+# ---------- 容器 / 磁盘 / 端口转发 / KMS ----------
+clone_pkg luci-app-dockox     permails/luci-app-dockox           main     # 根无PKG_NAME，回退=目录名，外层须叫 luci-app-dockox；拉 docker 全家
+clone_pkg diskbox             permails/luci-app-diskbox          master   # luci-app-diskbox（磁盘/分区/RAID）
+clone_pkg socat-reforged      busybin/luci-app-socat-reforged    main     # luci-app-socat-reforged（socat 端口转发）
+clone_pkg luci-app-vlmcsd     permails/luci-app-vlmcsd           main     # 外层须叫 luci-app-vlmcsd，否则与内嵌 vlmcsd/ 子包同名
 
-# ---------- zerotier LuCI（rabbitrogi；核心 zerotier 用官方 feeds）----------
-clone_pkg zerotier-luci       rabbitrogi/luci-app-zerotier       main
+# ---------- 应用管理 / DNS ----------
+clone_pkg openlist2           sbwml/luci-app-openlist2           main     # openlist2 + luci-app-openlist2
+clone_pkg adguardhome         w9315273/luci-app-adguardhome      main     # 真实包名 luci-app-adguardhome-tk（PROVIDES/CONFLICTS luci-app-adguardhome）
+clone_pkg wolmon              my1639963/luci-app-wolmon          main     # src/luci-app-wolmon，下方修相对 include
+clone_pkg harbor-file-pro     whzhni1/luci-app-harbor-file-pro   main     # luci-app-harbor-file-pro
+clone_pkg openappfilter       destan19/OpenAppFilter             master   # luci-app-oaf + oaf + open-app-filter
+
+# ---------- 硬件信息（MinimaxFlora autocore 25.12 适配，补回官方源没有的 arm/x86）----------
+clone_pkg autocore            MinimaxFlora/autocore              openwrt-25.12  # 变体 autocore-arm / autocore-x86，设备配置里分别选
+
+# ---------- 主题（默认主题由 Settings.sh 指定）----------
+clone_pkg theme-lumen         qidlek114/luci-theme-lumen         main     # luci-theme-lumen
+clone_pkg theme-footstrap     VizzleTF/luci-theme-footstrap      main     # 子包 luci-theme-footstrap
+clone_pkg luci-theme-aurora   eamonxg/luci-theme-aurora          master   # 根无PKG_NAME，回退=目录名，外层须叫 luci-theme-aurora
+clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外层须叫 luci-app-aurora-config
+
+# ---------- wolmon 相对 include 修正（克隆布局下 ../../luci.mk 指向错误）----------
+WOLMON_MK="package/custom/wolmon/src/luci-app-wolmon/Makefile"
+[ -f "$WOLMON_MK" ] && sed -i 's|^include ../../luci.mk$|include $(TOPDIR)/feeds/luci/luci.mk|' "$WOLMON_MK"
 
 # ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 # 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
@@ -63,54 +88,52 @@ clone_pkg zerotier-luci       rabbitrogi/luci-app-zerotier       main
 # 未被 Config 选中的包不会编译，只参与包索引（无副作用）。
 clone_pkg helloworld          sbwml/openwrt_helloworld            v5
 
-# README 配套操作①：删除 feeds 自带的同名核心包（否则 buildroot 收集阶段重复定义直接报错）。
-# 做法：提取 helloworld 内所有 PKG_NAME，逐个在 feeds 源码树 + package/feeds 符号链接里删除同名副本。
+# README 配套操作①：golang 换成 sbwml 23.x（helloworld 的 Go 核心按该版本构建，官方版本可能编不过）
+if [ -d feeds/packages/lang/golang ]; then
+  rm -rf feeds/packages/lang/golang
+  git clone -q --depth 1 -b 23.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang ||
+    echo "::warning::golang 23.x 换源失败，沿用官方版本"
+  # lang/golang 目录重建后，此前 scripts/feeds install -a 建的符号链接全部悬空，需重建
+  ./scripts/feeds install -a >/dev/null 2>&1 || true
+  echo "   golang 已切换为 sbwml 23.x 并重建 feeds 链接"
+fi
+
+# README 配套操作②：node 换成 sbwml 预编译版 https://github.com/sbwml/feeds_packages_lang_node
+# （官方 node 从源码编译极慢；sbwml 用 release 预编译产物秒装。原地替换路径，
+#  package/feeds/packages/node 符号链接指向同一路径无需重建。
+#  PKG_VERSION 保持 Makefile 原生动态解析，不做钉入。
+#  注意：不要替换 $(ARCH_PACKAGES)！它在三目标上本就展开为正确资产名
+#  （x86→x86_64、BPI-R4→aarch64_cortex-a53、H68K→aarch64_generic），硬编码会串架构）
+if [ -d feeds/packages/lang/node ]; then
+  rm -rf feeds/packages/lang/node
+  git clone -q --depth 1 -b packages-25.12 https://github.com/sbwml/feeds_packages_lang_node feeds/packages/lang/node ||
+    echo "::warning::sbwml node 换源失败，沿用官方版本"
+  echo "   node 已切换为 sbwml 预编译版（版本由 Makefile 动态解析）"
+fi
+
+# README 配套操作③ + 通用去重（必须放在最后一步：上面的 feeds install -a 会重建链接）
+# 删除 feeds 源码树与 package/feeds 符号链接中、与 package/custom 同名的副本，
+# 否则 buildroot 收集阶段重复定义直接报错。
 hb_names=$(mktemp)
-find package/custom/helloworld -mindepth 2 -maxdepth 3 -name Makefile 2>/dev/null | while read -r mk; do
-  grep -oE "^PKG_NAME[[:space:]]*:=[[:space:]]*[A-Za-z0-9._+-]+" "$mk" 2>/dev/null | head -1 | sed -E 's/^PKG_NAME[[:space:]]*:=//'
+# 取全部 custom 包的 PKG_NAME；根 Makefile 无 PKG_NAME 者（luci.mk 回退=目录名）用首层目录名补上
+find package/custom -mindepth 2 -name Makefile 2>/dev/null | while read -r mk; do
+  n=$(grep -oE "^PKG_NAME[[:space:]]*:=[[:space:]]*[A-Za-z0-9._+-]+" "$mk" 2>/dev/null | head -1 | sed -E 's/^PKG_NAME[[:space:]]*:=//')
+  if [ -n "$n" ]; then echo "$n"; else echo "$mk" | sed -E 's#package/custom/([^/]+)/.*#\1#'; fi
 done | sed '/^$/d' | sort -u > "$hb_names"
-rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}  # README 明确点名的 4 个
+# README 明确点名的 4 个先行删除（保险）
+rm -rf feeds/packages/net/{xray-core,v2ray-core,v2ray-geodata,sing-box}
 removed=0
 while read -r n; do
   [ -n "$n" ] || continue
-  # feeds 真实源码目录（net/utils/lang 等任意子层）
   for d in $(find feeds -maxdepth 3 -mindepth 2 -type d -name "$n" 2>/dev/null); do
     rm -rf "$d"; removed=$((removed+1))
   done
-  # scripts/feeds install 建的符号链接
   for l in $(find package/feeds -maxdepth 2 -name "$n" 2>/dev/null); do
     rm -rf "$l"; removed=$((removed+1))
   done
 done < "$hb_names"
 rm -f "$hb_names"
-echo "   README 去重：移除 feeds 中与 helloworld 同名的副本 ${removed} 处"
-
-# README 配套操作②：golang 换成 sbwml 23.x（helloworld 的 Go 核心按该版本构建，官方版本可能编不过）
-if [ -d feeds/packages/lang/golang ]; then
-  rm -rf feeds/packages/lang/golang
-  git clone -q --depth 1 -b 23.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang ||
-    echo "::warning::golang 23.x 换源失败，沿用官方版本"
-  echo "   golang 已切换为 sbwml 23.x"
-  # lang/golang 目录重建后，此前 scripts/feeds install -a 建的符号链接全部悬空，需重建
-  ./scripts/feeds install -a >/dev/null 2>&1 || true
-fi
-
-# node 换成 sbwml 预编译版 https://github.com/sbwml/feeds_packages_lang_node
-# （官方 node 从源码编译极慢；sbwml 用 release 预编译产物秒装；helloworld 仓库本身不含 node，
-#  node 替换来自该专用仓库。原地替换路径，package/feeds/packages/node 符号链接无需重建）
-# PKG_VERSION 保持 Makefile 原生行为（shell 动态解析 sbwml/node_workflow tags），不做钉入
-if [ -d feeds/packages/lang/node ]; then
-  rm -rf feeds/packages/lang/node
-  git clone -q --depth 1 -b packages-25.12 https://github.com/sbwml/feeds_packages_lang_node feeds/packages/lang/node ||
-    echo "::warning::sbwml node 换源失败，沿用官方版本"
-  # 注意：不要替换 $(ARCH_PACKAGES)！它在三目标上本就展开为正确资产名
-  # （x86→x86_64、BPI-R4→aarch64_cortex-a53、H68K→aarch64_generic），硬编码会串架构
-  echo "   node 已切换为 sbwml 预编译版（版本由 Makefile 动态解析）"
-fi
-
-# ---------- vlmcsd（permails：根 Makefile 无 PKG_NAME，包名回退=目录名，故目录必须叫 luci-app-vlmcsd，
-#            否则与其内嵌的 vlmcsd/ 子包同名 → buildroot 重复包错误）----------
-clone_pkg luci-app-vlmcsd     permails/luci-app-vlmcsd          main
+echo "   去重：移除 feeds 中与 custom 同名的副本 ${removed} 处"
 
 echo "==> 自定义包目录："
 find package/custom -maxdepth 1 -mindepth 1 -type d | sort
