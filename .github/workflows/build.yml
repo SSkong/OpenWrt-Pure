@@ -189,6 +189,31 @@ jobs:
             total=$((total+1))
             echo "$fin" | grep -qx "$w" || { echo "✗ 未生效: $w"; lost=$((lost+1)); }
           done
+          # 未生效包的依赖诊断：打印该包在生成的 kconfig 中的 depends on 段，
+          # 并标出哪个依赖符号在最终 .config 中未被启用，避免反复盲试构建。
+          if [ "$lost" -gt 0 ]; then
+            echo "----- 依赖诊断（tmp/.config-package.in）-----"
+            for w in "${want[@]}"; do
+              echo "$fin" | grep -qx "$w" && continue
+              start=$(grep -n "^config PACKAGE_${w}\$" tmp/.config-package.in | head -1 | cut -d: -f1)
+              if [ -z "$start" ]; then
+                echo "  [$w] 未在 tmp/.config-package.in 中出现（源码 Makefile 未被 buildroot 收集或包名与目录不符）"
+                continue
+              fi
+              end=$(( start + 30 ))
+              sed -n "${start},${end}p" tmp/.config-package.in | sed -n '1,/^config /p' | grep -E "^(config|	prompt|	depends on|	select|	visible)" \
+                | while read -r ln; do
+                  sym=$(echo "$ln" | grep -oE 'PACKAGE_[A-Za-z0-9._+-]+' | head -1)
+                  if [ -n "$sym" ]; then
+                    on=$(echo "$fin" | grep -qx "${sym#PACKAGE_}" && echo "✓已启用" || echo "✗未启用")
+                    echo "  [$w] $on  $ln"
+                  else
+                    echo "  [$w]        $ln"
+                  fi
+                done
+            done
+            echo "----- 依赖诊断结束 -----"
+          fi
           [ "$lost" = "0" ] || { echo "ERROR: $lost/$total 个指定包未能生效"; exit 1; }
           echo "✅ ${total} 个指定功能包全部选中生效"
 
