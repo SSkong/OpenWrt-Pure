@@ -117,7 +117,11 @@ Scripts/
   Packages.sh          # 克隆自定义包到 package/custom/
   Settings.sh          # 默认主机名/管理IP/LuCI 日期标识（纯配置层）
   H68K.sh              # 仅 H68K：应用设备支持补丁（带内核版本守卫）
+  Fullcone.sh          # SONiC fullcone NAT 补丁（必须在 feeds install 之后、download 之前）
+  VerifyPackages.sh    # 校验请求的包是否真的进了 .config（可本地单独跑）
+  Cache.sh             # 把 Go/Rust 编译缓存挪到可缓存的位置（必须在 defconfig 之前）
 Patches/h68k/          # H68K 两个补丁
+Patches/fullcone/      # fullcone 内核 + nftables/iptables/firewall4/LuCI 补丁
 .github/workflows/build.yml
 .gitattributes         # 强制 LF，防止 CRLF 弄坏脚本与补丁
 ```
@@ -134,7 +138,27 @@ Patches/h68k/          # H68K 两个补丁
 | BPI-R4 | 80–120 min | 35–50 min |
 | H68K | 100–150 min | 45–60 min |
 
-构建缓存覆盖 `staging_dir/host*` 与 `staging_dir/tool*`（工具链），源码 commit 变动时自动失效。
+### CI 缓存了什么
+
+| 缓存 | 路径 | key |
+|---|---|---|
+| 工具链 | `openwrt/staging_dir/host*`、`tool*` | `<设备>-<源码 commit>` |
+| Go 构建缓存（GOCACHE） | `.build-cache/go-build` | `go-build-<设备>-<源码 commit>` |
+| Rust 编译产物（CARGO_TARGET_DIR） | `.build-cache/cargo-target` | `cargo-target-<设备>-<源码 commit>` |
+
+两个 Go/Rust 目录默认都在「每次必丢」的位置，由 `Scripts/Cache.sh` 改出来：
+
+- Go：默认 `$(TMP_DIR)/go-build`，即 `openwrt/tmp`，全新 runner 恒为空。改成写 `.config` 里的 `CONFIG_GOLANG_BUILD_CACHE_DIR`（golang 自带的 kconfig string）。
+- Rust：`rust-values.mk` 压根没设 `CARGO_TARGET_DIR`，cargo 用缺省的 `$(PKG_BUILD_DIR)/target`，包目录一重建就丢。改成往 `CARGO_PKG_CONFIG_VARS` 追加，只作用于目标包编译，不碰 `rust/host` 的引导构建。
+
+两个额外细节：
+
+- 恢复出来的 Go 缓存要整体 `touch` 一遍。go 会按最近使用时间清理构建缓存（5 天未用即删），`actions/cache` 恢复的文件带着归档时的 mtime，两次构建间隔超过 5 天就会被自己清空。缓存本身是内容寻址的，刷 mtime 只影响清理、不影响命中。
+- **不缓存 `dl/`**。源码 tarball 重新下载只要几分钟，缓存它挤占配额不划算。Go 模块缓存（`dl/go-mod-cache`）和 cargo registry（`dl/cargo`）也在 `dl/` 下，但都是内容寻址的，不缓存也不会让上面两个缓存失效——重新下载得到的字节完全一致，命中同样的哈希。
+
+工具链与 Go/Rust 缓存都在源码 commit 变动时自动失效（key 里带 `SRC_HASH`，`restore-keys` 允许回退到同设备的旧缓存）。
+
+**配额提醒**：仓库总配额 10GB，三设备全开是 3 份工具链 + 3 份 Go + 3 份 Rust，会比较紧张。构建末尾的「缓存体量统计」步骤会打印三者体量；如果发现缓存被 LRU 反复淘汰（日志里明明没改源码却一直 cache miss），优先砍掉 Rust 那份（删掉 `恢复 Rust 编译缓存` 一步即可），Go 的收益更大。
 
 ## 如何确认一次构建是真的可用
 
