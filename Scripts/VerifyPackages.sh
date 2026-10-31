@@ -69,7 +69,8 @@ echo "被 defconfig 取消:${dropped:- 无}"
 
 # 关键清单：这些是「加了就该出现」的包，少一个就判失败，避免产出看着正常但缺功能的固件。
 # 从 .config.requested 自动提取，不用手工维护清单。
-grep -oE '^CONFIG_PACKAGE_(luci-app-[A-Za-z0-9._+-]+|luci-theme-[A-Za-z0-9._+-]+|stuntman-client|autocore-(arm|x86)|kmod-[A-Za-z0-9._+-]+)=y' .config.requested \
+# easytier 单独列出：它的 luci-app 不带核心包，是最容易「静默少东西」的一项。
+grep -oE '^CONFIG_PACKAGE_(luci-app-[A-Za-z0-9._+-]+|luci-theme-[A-Za-z0-9._+-]+|stuntman-client|autocore-(arm|x86)|kmod-[A-Za-z0-9._+-]+|easytier)=y' .config.requested \
 	| sed 's/^CONFIG_PACKAGE_//; s/=y$//' | sort -u > "$WORK/want"
 
 lost=0
