@@ -126,11 +126,24 @@ clone_all() {
 	# ---------- 硬件信息（MinimaxFlora autocore 25.12 适配，补回官方源没有的 arm/x86）----------
 	clone_pkg autocore            MinimaxFlora/autocore              openwrt-25.12  # 变体 autocore-arm / autocore-x86，设备配置里分别选
 
-	# ---------- 主题（默认主题由 Settings.sh 指定）----------
+	# ---------- 主题 ----------
+	# 装多个主题只是多占磁盘，互不冲突；实际生效的是 luci.main.mediaurlbase，
+	# 由用户在「系统 → 界面」里选，脚本不做覆盖（改了会把用户的选择冲掉）。
+	# 目录名规则：仓库根 Makefile 里有 PKG_NAME 的，目录名可以随意；
+	# 没有 PKG_NAME 的（luci.mk 用 $(notdir $(CURDIR)) 回退），目录名必须等于包名。
 	clone_pkg theme-lumen         qidlek114/luci-theme-lumen         main     # luci-theme-lumen
 	clone_pkg theme-footstrap     VizzleTF/luci-theme-footstrap      main     # 子包 luci-theme-footstrap
 	clone_pkg luci-theme-aurora   eamonxg/luci-theme-aurora          master   # 根无PKG_NAME，回退=目录名，外层须叫 luci-theme-aurora
 	clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外层须叫 luci-app-aurora-config
+	clone_pkg luci-theme-shadcn   eamonxg/luci-theme-shadcn          main     # 同上：根无PKG_NAME，外层须叫 luci-theme-shadcn
+	clone_pkg luci-theme-7dollar  itsmaiGe/luci-theme-7dollar        main     # PKG_NAME=luci-theme-7dollar，目录名与之一致
+	# vantage：根无 Makefile，两个包在子目录里（luci-theme-vantage/ 主题 + luci-app-vantage/ 看板），
+	# buildroot 会递归扫描，两个都能识别。PKG_NAME 显式声明，故外层目录名可任取。
+	clone_pkg theme-vantage       anothaDev/luci-theme-vantage       main
+	# uniwrt：同样根无 Makefile，包实体在 luci-theme-uniwrt/；它的 PKG_VERSION 是
+	# $(shell cat $(CURDIR)/ucode/template/themes/uniwrt/version) —— 依赖那个文件存在，
+	# 缺了会得到一个空版本号，所以仓库必须完整克隆，不能只拷贝子目录。
+	clone_pkg uniwrt-luci         ox1d3x3/uniwrt-luci                main
 
 	# ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 	# 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/

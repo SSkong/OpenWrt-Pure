@@ -114,6 +114,7 @@ fi
 awk '{
 	if ($0 ~ /^(luci-app-|luci-theme-|kmod-)/ ||
 	    $0 == "stuntman-client" || $0 == "easytier" ||
+	    $0 == "etherwake" ||
 	    $0 == "autocore-arm" || $0 == "autocore-x86") print $0
 }' "$WORK/req" | sort -u > "$WORK/want"
 
