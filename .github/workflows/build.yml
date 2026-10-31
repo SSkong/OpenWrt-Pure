@@ -221,9 +221,26 @@ jobs:
         run: |
           set -o pipefail   # 默认 bash -e 不含 pipefail，不加这个 tee 会把 make 的失败吞掉
           cd openwrt
+
+          # 资源心跳：每 5 分钟记一次磁盘 / 内存曲线，单独写 usage.log（不跟 make 抢
+          # build.log）。x86 的镜像阶段（vmlinux.debug + rootfs.tar.gz + root.squashfs
+          # 同时存在）是整轮构建的磁盘峰值，93G 卷和 15G 内存都在这个点最紧张；
+          # 万一报错又被 make 吞掉，曲线是判断 ENOSPC / OOM 的唯一线索。
+          (
+            while :; do
+              printf '%s  ' "$(date -u +%H:%M:%S)"
+              df -h /home/runner/work | awk 'NR==2{printf "disk used %s / %s (avail %s)  ", $3, $2, $4}'
+              free -m | awk 'NR==2{printf "mem %sMB / %sMB used\n", $3, $2}'
+              sleep 300
+            done
+          ) > ../usage.log 2>&1 &
+          heartbeat=$!
+
           if make -j$(( $(nproc) + 1 )) 2>&1 | tee ../build.log; then
+            kill "$heartbeat" 2>/dev/null || true
             exit 0
           fi
+          kill "$heartbeat" 2>/dev/null || true
 
           # ---- 失败定位 ----
           # 并行构建的出错现场会被 make 吞掉：build.log 里只留下
@@ -238,6 +255,8 @@ jobs:
           df -h || true
           free -h || true
           du -sh build_dir staging_dir dl bin 2>/dev/null || true
+          echo "----- 资源曲线（末尾 10 条）-----"
+          tail -10 ../usage.log 2>/dev/null || true
 
           # 注意末尾的 || true：找不到匹配时 grep 退出 1，在 set -e 下会直接把这一步
           # 结束掉，后面判断「有没有子目录」的分支就跑不到了。
@@ -304,6 +323,7 @@ jobs:
           path: |
             build-tail.log
             retry-tail.log
+            usage.log
             openwrt/.config
             openwrt/.config.requested
             openwrt/logs/
