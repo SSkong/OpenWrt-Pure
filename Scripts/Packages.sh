@@ -197,25 +197,57 @@ patch_vendor() {
 	# 这里补一个等效宏，插在 include luci.mk 之前：luci.mk 自己的 postinst 有 ifndef 保护，
 	# 且它定义在后面会覆盖前面的同名宏，所以必须放在 include 之前。
 	LG_MK="package/custom/luci-app-languard/Makefile"
+	LG_PI="package/custom/luci-app-languard/postinst"
 	if [ -f "$LG_MK" ]; then
 		if ! has_text 'Package/luci-app-languard/postinst' "$LG_MK"; then
-			awk '/^include \$\(TOPDIR\)\/feeds\/luci\/luci\.mk/ && !ins {
-				print "define Package/luci-app-languard/postinst"
-				print "\tmkdir -p /etc/languard"
-				print "\trm -f /tmp/luci-indexcache.*"
-				print "\trm -rf /tmp/luci-modulecache/"
-				print "\t/etc/init.d/rpcd restart >/dev/null 2>&1"
-				print "\t/etc/init.d/languard enable >/dev/null 2>&1"
-				print "\t/etc/init.d/languard restart >/dev/null 2>&1"
-				print "endef"
-				print ""
-				ins = 1
-			} { print }' "$LG_MK" > "$LG_MK.tmp" && mv "$LG_MK.tmp" "$LG_MK" ||
-				{ rm -f "$LG_MK.tmp"; die "languard Makefile 注入 postinst 失败: $LG_MK"; }
+			[ -f "$LG_PI" ] ||
+				die "languard: 上游 postinst 文件不见了（$LG_PI），请确认上游打包方式是否变了"
+
+			# 正文直接从上游 postinst 搬，不再手写。手写的简化版丢了上游的
+			# [ -n "${IPKG_INSTROOT}" ] 守卫，而打包阶段（package/install）postinst 是在
+			# host 上执行、用 IPKG_INSTROOT 指向目标 rootfs 的：没有守卫就会去
+			#   mkdir -p /etc/languard          → Permission denied
+			#   /etc/init.d/languard restart    → host 上没有，退出码 127
+			# 于是 postinst 整体失败，package/install 报错（run 41150505816，H68K）。
+			# 转换规则：
+			#   1. 去掉 shebang、整行注释、空行
+			#   2. 以反斜杠结尾的续行合并成一行 —— 正文最终由 package-pack.mk 用
+			#        echo "<宏内容>" > postinst-pkg
+			#      落盘，反斜杠在部分 shell 的 echo 里会被当转义符吃掉
+			#   3. 每个 $ 写成 $$，make 展开后剩一个（与 luci.mk / rpcd 的写法一致）
+			awk '
+				FNR == NR {
+					if ($0 ~ /^#!/ || $0 ~ /^[[:space:]]*#/ || $0 ~ /^[[:space:]]*$/) next
+					line = $0
+					while (line ~ /\\$/) {
+						sub(/\\$/, "", line)
+						if ((getline nxt) <= 0) break
+						sub(/^[[:space:]]+/, "", nxt)
+						line = line " " nxt
+					}
+					gsub(/\$/, "$$", line)
+					body = body line "\n"
+					next
+				}
+				/^include \$\(TOPDIR\)\/feeds\/luci\/luci\.mk/ && !ins {
+					print "define Package/luci-app-languard/postinst"
+					printf "%s", body
+					print "endef"
+					print ""
+					ins = 1
+				}
+				{ print }
+			' "$LG_PI" "$LG_MK" > "$LG_MK.tmp" ||
+				{ rm -f "$LG_MK.tmp"; die "languard: 生成 postinst 宏失败（awk 出错）"; }
+			has_text 'define Package/luci-app-languard/postinst' "$LG_MK.tmp" ||
+				{ rm -f "$LG_MK.tmp"; die "languard: $LG_MK 里找不到 'include \$(TOPDIR)/feeds/luci/luci.mk' 锚点，宏插不进去"; }
+			has_text '[ -n "$${IPKG_INSTROOT}" ] || {' "$LG_MK.tmp" ||
+				{ rm -f "$LG_MK.tmp"; die "languard: 生成的宏里没有 IPKG_INSTROOT 守卫，上游 postinst 结构可能变了"; }
+			mv "$LG_MK.tmp" "$LG_MK" || die "languard: 写回 $LG_MK 失败"
+			sub "languard: 已从上游 postinst 生成 Package/luci-app-languard/postinst 宏"
 		fi
 		has_text 'Package/luci-app-languard/postinst' "$LG_MK" ||
-			die "languard: postinst 宏未注入成功（$LG_MK 里找不到 include luci.mk 锚点？）"
-		sub "languard: 已补 Package/luci-app-languard/postinst 宏"
+			die "languard: postinst 宏未注入成功（$LG_MK）"
 	else
 		warn "languard: 未找到 $LG_MK，跳过 postinst 注入"
 	fi
@@ -246,13 +278,31 @@ swap_feeds() {
 	# README 配套操作②：node 换成 sbwml 预编译版 https://github.com/sbwml/feeds_packages_lang_node
 	# （官方 node 从源码编译极慢；sbwml 用 release 预编译产物秒装。原地替换路径，
 	#  package/feeds/packages/node 符号链接指向同一路径无需重建。
-	#  PKG_VERSION 保持 Makefile 原生动态解析，不做钉入。
 	#  注意：不要替换 $(ARCH_PACKAGES)！它在三目标上本就展开为正确资产名
 	#  （x86→x86_64、BPI-R4→aarch64_cortex-a53、H68K→aarch64_generic），硬编码会串架构）
+	#
+	#  PKG_VERSION 必须自己钉死。上游 Makefile 写的是：
+	#    PKG_VERSION:=$(shell curl -s https://api.github.com/repos/sbwml/node_workflow/tags | ...)
+	#  解析 Makefile 时就发一次未认证的 GitHub API 请求。CI runner 是共享出口 IP，
+	#  未认证配额只有 60 次/小时，被限流时返回体里没有 "name" 字段 → 正则匹配不到
+	#  → PKG_VERSION 变成空串 → 下载地址变成 .../releases/download/v/x86_64.tar.gz
+	#  → 404 →「install: cannot stat .../node-/usr/bin/node」→ 编译 4 小时后才失败
+	#  （run 41150505816，X86；同时 build_dir 也变成 node-）。
+	#  改用 git ls-remote 取最新 tag（走 git 协议，不吃 API 配额）再写回 Makefile。
 	if [ -d feeds/packages/lang/node ]; then
 		rm -rf feeds/packages/lang/node
 		if git clone -q --depth 1 -b packages-25.12 https://github.com/sbwml/feeds_packages_lang_node feeds/packages/lang/node; then
-			sub "node 已切换为 sbwml 预编译版（版本由 Makefile 动态解析）"
+			NODE_MK="feeds/packages/lang/node/Makefile"
+			node_ver="$(git ls-remote --tags --refs https://github.com/sbwml/node_workflow 'v*' 2>/dev/null |
+				sed 's|.*refs/tags/v||' | grep -E '^[0-9]+(\.[0-9]+)+$' | sort -V | tail -1)"
+			if [ -z "$node_ver" ]; then
+				die "node: 取不到 sbwml/node_workflow 的最新 tag。若不钉版本，上游会在解析时 curl GitHub API，被限流就得到空版本号，最终在下载阶段 404（已浪费过一次 4 小时构建）"
+			fi
+			sed -i -E "s|^PKG_VERSION:=.*node_workflow.*|PKG_VERSION:=$node_ver|" "$NODE_MK" ||
+				die "node: 改写 $NODE_MK 的 PKG_VERSION 失败"
+			grep -qxF "PKG_VERSION:=$node_ver" "$NODE_MK" ||
+				die "node: PKG_VERSION 未钉入成功（$NODE_MK 里没有 'PKG_VERSION:=$node_ver'，上游 Makefile 布局已变？）"
+			sub "node 已切换为 sbwml 预编译版，PKG_VERSION 钉为 $node_ver"
 		else
 			warn "sbwml node 换源失败，沿用官方版本"
 		fi
