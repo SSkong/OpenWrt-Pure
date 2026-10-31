@@ -210,17 +210,6 @@ jobs:
           restore-keys: |
             go-build-${{ matrix.name }}-
 
-      - name: 恢复 Rust 编译缓存
-        # Rust 默认没有 CARGO_TARGET_DIR，cargo 用 $(PKG_BUILD_DIR)/target，包一重建就丢；
-        # Scripts/Cache.sh 已把它改到 .build-cache/cargo-target。
-        id: cargocache
-        uses: actions/cache@v4
-        with:
-          path: .build-cache/cargo-target
-          key: cargo-target-${{ matrix.name }}-${{ env.SRC_HASH }}
-          restore-keys: |
-            cargo-target-${{ matrix.name }}-
-
       - name: 激活缓存的 Go 构建缓存
         # go 会按「最近使用时间」清理构建缓存：超过 5 天没被用过的条目，会在下一次写入时
         # 被整批删掉。actions/cache 恢复出来的文件带着归档时刻的 mtime，两次构建间隔超过
