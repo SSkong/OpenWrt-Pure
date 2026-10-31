@@ -33,16 +33,29 @@ trap 'rm -rf "$WORK"' EXIT
 # 之后）才是最终意图。原先的实现是直接 grep `=y`，于是任何设备级关包的包都会
 # 同时出现在「请求」和「未生效」里 —— 明明是有意关掉的，构建却判失败
 # （x86 关 luci-app-dockox 时就会踩到）。
+#
+# 另外必须容忍行尾注释：base.config 里有 `CONFIG_PACKAGE_kmod-mt7921u=y   # MT7921 ...`
+# 这种写法，kconfig 读取时会把 `#` 之后连同前面空白一起丢掉（历次构建里这些包都
+# 真的生效了），但带 `$` 锚点的正则匹配不到。漏掉的后果不是报错而是**静默不校验**
+# —— 那行恰好是 kmod-mt7921u，正是关键包清单里的一项。
 extract_on() {
 	awk '
-		/^CONFIG_PACKAGE_[A-Za-z0-9._+-]+=y$/ {
-			s = $0; sub(/=y$/, "", s); st[s] = "y"; next
-		}
-		/^CONFIG_PACKAGE_[A-Za-z0-9._+-]+=/ {
-			s = $0; sub(/=.*/, "", s); st[s] = "other"; next
-		}
-		/^# CONFIG_PACKAGE_[A-Za-z0-9._+-]+ is not set$/ {
-			s = $0; sub(/^# /, "", s); sub(/ is not set$/, "", s); st[s] = "n"; next
+		{
+			line = $0
+			sub(/\r$/, "", line)                    # 防 CRLF
+			if (line !~ /^[ \t]*#/) {               # 注释行原样保留
+				sub(/[ \t]+#.*$/, "", line)         # 行尾注释（kconfig 同样忽略）
+				sub(/[ \t]+$/, "", line)
+			}
+			if (line ~ /^CONFIG_PACKAGE_[A-Za-z0-9._+-]+=y$/) {
+				s = line; sub(/=y$/, "", s); st[s] = "y"; next
+			}
+			if (line ~ /^CONFIG_PACKAGE_[A-Za-z0-9._+-]+=/) {
+				s = line; sub(/=.*/, "", s); st[s] = "other"; next
+			}
+			if (line ~ /^# CONFIG_PACKAGE_[A-Za-z0-9._+-]+ is not set$/) {
+				s = line; sub(/^# /, "", s); sub(/ is not set$/, "", s); st[s] = "n"; next
+			}
 		}
 		END { for (s in st) if (st[s] == "y") print s }
 	' "$1" | sed 's/^CONFIG_PACKAGE_//' | sort -u
@@ -83,11 +96,26 @@ echo "无源码目录:${nodir:- 无}"
 echo "被 defconfig 取消:${dropped:- 无}"
 [ -z "$dropped" ] || echo "::warning::有包被 defconfig 取消选中（依赖不满足）:${dropped}"
 
+# 设备级显式关闭：base 里有、最终意图里没有。这类是**有意**关掉的，不该进关键清单，
+# 也不该报错，但要打出来 —— 否则「明明关了却还在校验」这种自相矛盾没法被看见。
+if [ -f "../Config/base.config" ] && [ -f "../Config/${DEV}.config" ]; then
+	extract_on ../Config/base.config > "$WORK/base"
+	off="$(comm -23 "$WORK/base" "$WORK/req" | tr '\n' ' ' | sed 's/ *$//')"
+	echo "设备级关闭: ${off:-无}"
+fi
+
 # 关键清单：这些是「加了就该出现」的包，少一个就判失败，避免产出看着正常但缺功能的固件。
-# 从 .config.requested 自动提取，不用手工维护清单。
-# easytier 单独列出：它的 luci-app 不带核心包，是最容易「静默少东西」的一项。
-grep -oE '^CONFIG_PACKAGE_(luci-app-[A-Za-z0-9._+-]+|luci-theme-[A-Za-z0-9._+-]+|stuntman-client|autocore-(arm|x86)|kmod-[A-Za-z0-9._+-]+|easytier)=y' .config.requested \
-	| sed 's/^CONFIG_PACKAGE_//; s/=y$//' | sort -u > "$WORK/want"
+# 不手工维护清单，而是从**最终意图**（$WORK/req，已按「同符号最后一行为准」求解）里筛。
+#
+# 这里曾经是直接 `grep '^CONFIG_PACKAGE_...=y' .config.requested`：grep -o 只看前缀，
+# 不看后面是否被设备配置关掉，于是 x86 明确写着
+# `# CONFIG_PACKAGE_luci-app-dockox is not set`，它照样被算成「请求了但没生效」，
+# 构建在 4 分钟就红（run 41203401554）。已改为复用 req，与上面的判定同一口径。
+awk '{
+	if ($0 ~ /^(luci-app-|luci-theme-|kmod-)/ ||
+	    $0 == "stuntman-client" || $0 == "easytier" ||
+	    $0 == "autocore-arm" || $0 == "autocore-x86") print $0
+}' "$WORK/req" | sort -u > "$WORK/want"
 
 lost=0
 total=0
