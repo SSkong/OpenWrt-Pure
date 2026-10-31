@@ -239,7 +239,9 @@ jobs:
           free -h || true
           du -sh build_dir staging_dir dl bin 2>/dev/null || true
 
-          sub="$(grep -oE 'ERROR: [^ ]+ failed to build' ../build.log | tail -1 | awk '{print $2}')"
+          # 注意末尾的 || true：找不到匹配时 grep 退出 1，在 set -e 下会直接把这一步
+          # 结束掉，后面判断「有没有子目录」的分支就跑不到了。
+          sub="$(grep -oE 'ERROR: [^ ]+ failed to build' ../build.log | tail -1 | awk '{print $2}' || true)"
           if [ -n "$sub" ]; then
             echo "失败子目录: $sub"
             timeout 3600 make -j1 V=s "$sub/install" 2>&1 | tee ../retry.log | tail -200
