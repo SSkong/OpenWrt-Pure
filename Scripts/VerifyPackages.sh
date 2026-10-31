@@ -26,10 +26,26 @@ done
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# 从 kconfig 里取「显式选中」的包名
+# 从 kconfig 里取「显式选中」的包名。
+#
+# 必须按「同一符号以最后一行为准」来算：.config.requested 是 base.config 与设备
+# config **顺序拼接**的，设备级覆盖（`# CONFIG_X is not set` 写在 base 的 `=y`
+# 之后）才是最终意图。原先的实现是直接 grep `=y`，于是任何设备级关包的包都会
+# 同时出现在「请求」和「未生效」里 —— 明明是有意关掉的，构建却判失败
+# （x86 关 luci-app-dockox 时就会踩到）。
 extract_on() {
-	grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9._-]+=y' "$1" \
-		| sed 's/^CONFIG_PACKAGE_//; s/=y$//' | sort -u
+	awk '
+		/^CONFIG_PACKAGE_[A-Za-z0-9._+-]+=y$/ {
+			s = $0; sub(/=y$/, "", s); st[s] = "y"; next
+		}
+		/^CONFIG_PACKAGE_[A-Za-z0-9._+-]+=/ {
+			s = $0; sub(/=.*/, "", s); st[s] = "other"; next
+		}
+		/^# CONFIG_PACKAGE_[A-Za-z0-9._+-]+ is not set$/ {
+			s = $0; sub(/^# /, "", s); sub(/ is not set$/, "", s); st[s] = "n"; next
+		}
+		END { for (s in st) if (st[s] == "y") print s }
+	' "$1" | sed 's/^CONFIG_PACKAGE_//' | sort -u
 }
 
 extract_on .config.requested > "$WORK/req"

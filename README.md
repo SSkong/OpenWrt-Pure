@@ -6,9 +6,32 @@
 
 | 设备 | 平台 | 内核 | 说明 |
 |---|---|---|---|
-| **X86** | `x86/64` generic | 官方原版 | 完全官方支持，零内核改动；产物为 `ext4-combined-efi` / `squashfs-combined-efi` 整盘镜像 |
+| **X86** | `x86/64` generic | 官方原版 | 完全官方支持，零内核改动；按 **PVE 虚拟机**裁剪，只出 `ext4-combined-efi.img.gz`（详见下节） |
 | **BPI-R4** | `mediatek/filogic` | 官方原版 | Banana Pi BPI-R4（MT7988A），官方原生支持，零内核改动 |
 | **H68K** | `rockchip/armv8` | 官方 + 2 个补丁 | Hinlink H68K（RK3568），官方 25.12 **没有**该设备，需 backport 见下 |
+
+### X86 镜像的 PVE 取向
+
+X86 这台按「PVE 里的路由虚拟机」定型（q35 + OVMF + virtio-scsi-single），不是刷物理机 U 盘的：
+
+- **ext4 根分区，不出 squashfs**：导入 8G 盘后可以 `fdisk` 删掉重建分区 2 + `resize2fs` 扩到整盘；只读的 squashfs 根做不到这一点。代价是没有「恢复出厂」的只读基底，回滚靠快照。
+- **只出 UEFI（`*-ext4-combined-efi.img.gz`）**：legacy BIOS 的 `combined.img.gz` 在 VM 里用不上，关掉少做一份镜像（x86 镜像阶段是整轮构建的磁盘峰值）。
+- **默认管理地址 10.0.0.1**（写入 `package/base-files/files/bin/config_generate`），主机名 `OpenWrt-X86`。
+- **不带 docker**：容器交给 PVE 的 LXC / 独立 VM，路由镜像里再塞一套 dockerd 只是白占空间与 kmod。
+- virtio 驱动不需要额外装任何 kmod：`target/linux/x86/64/config-6.12` 里 `VIRTIO_PCI` / `VIRTIO_BLK` / `VIRTIO_NET` / `SCSI_VIRTIO` / `VIRTIO_BALLOON` / `HW_RANDOM_VIRTIO` 全是 `=y`。
+
+```bash
+gunzip openwrt-25.12.6-x86-64-generic-ext4-combined-efi.img.gz
+qm create 100 --name OpenWrt --ostype l26 --machine q35 --bios ovmf \
+  --cpu host --cores 2 --memory 2048 --balloon 0 \
+  --scsihw virtio-scsi-single --net0 virtio,bridge=vmbr1,firewall=0 \
+  --serial0 socket --vga serial0 --onboot 1
+qm importdisk 100 openwrt-25.12.6-x86-64-generic-ext4-combined-efi.img local-zfs
+qm set 100 --efidisk0 local-zfs:0,efitype=4m,pre-enrolled-keys=0
+qm set 100 --scsi0 local-zfs:vm-100-disk-0,discard=on,ssd=1 --boot order=scsi0
+# 启动后扩容根分区（镜像里分区 2 只有 1G）：
+#   fdisk /dev/sda → 删分区 2、按原起始扇区重建 → resize2fs /dev/sda2
+```
 
 ### H68K 的两个补丁（唯一的“动内核”部分）
 

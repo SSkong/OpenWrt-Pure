@@ -280,10 +280,11 @@ jobs:
           out="artifact/${{ matrix.name }}"
           mkdir -p "$out"
           src="openwrt/bin/targets/${{ matrix.target }}"
-          # 主镜像：x86 是 *-combined(-efi).img.gz，mediatek 是 *.itb + sdcard.img.gz，
-          # rockchip 是 *sysupgrade.img.gz
+          # 主镜像：x86 是 *-combined-efi.img.gz（ext4 根），mediatek 是 *.itb + sdcard.img.gz，
+          # rockchip 是 *sysupgrade.img.gz。排除 *-rootfs.img.gz：那是给容器/自定义布局用的
+          # 纯 rootfs（没有引导），PVE 导入用不上，白占几百 MB 上传量。
           find "$src" -maxdepth 1 -type f \( -name "*.img.gz" -o -name "*.itb" \) \
-            -exec cp -f {} "$out/" \;
+            ! -name "*-rootfs.img.gz" -exec cp -f {} "$out/" \;
           # 引导件：mediatek 的 preloader 是 .bin，BL31/U-Boot 是 .fip（不是 .bin，
           # 原先写成 *fip*.bin 会把这些文件全部漏掉，导致 eMMC/救砖包缺失）
           find "$src" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.fip" \) \

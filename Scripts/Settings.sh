@@ -13,7 +13,7 @@ enter "${1:-.}"
 DEVICE="${2:?用法: Settings.sh <openwrt目录> <x86|bpi-r4|h68k>}"
 
 case "$DEVICE" in
-	x86)     DEF_IP="192.168.1.1";  HOSTNAME_WRT="OpenWrt-X86" ;;
+	x86)     DEF_IP="10.0.0.1";     HOSTNAME_WRT="OpenWrt-X86" ;;
 	bpi-r4)  DEF_IP="192.168.10.1"; HOSTNAME_WRT="OpenWrt-BPI-R4" ;;
 	h68k)    DEF_IP="192.168.20.1"; HOSTNAME_WRT="OpenWrt-H68K" ;;
 	*) die "未知设备 $DEVICE（可选：x86 / bpi-r4 / h68k）" ;;
