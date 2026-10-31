@@ -221,11 +221,37 @@ jobs:
         run: |
           set -o pipefail   # 默认 bash -e 不含 pipefail，不加这个 tee 会把 make 的失败吞掉
           cd openwrt
-          make -j$(( $(nproc) + 1 )) 2>&1 | tee ../build.log || {
-            echo "::warning::并行编译失败，转单线程定位错误"
-            timeout 1800 make -j1 V=s 2>&1 | tail -200
-            exit 1
-          }
+          if make -j$(( $(nproc) + 1 )) 2>&1 | tee ../build.log; then
+            exit 0
+          fi
+
+          # ---- 失败定位 ----
+          # 并行构建的出错现场会被 make 吞掉：build.log 里只留下
+          #   ERROR: target/linux failed to build.
+          # 这一行，失败子目录内部到底报了什么完全看不到（run 41180136421 就是这么
+          # 丢的现场：6 分钟里只有 3 行摘要）。
+          # 原先的做法是 `make -j1 V=s` 整体重跑，30 分钟根本跑不完 world，还会被
+          # timeout 砍掉（exit 124 盖掉了真正的失败原因）。改成只单线程重跑失败的那
+          # 一个子目录 —— 前面的 stamp 都在，能直接走到出错点。
+          echo "::warning::并行编译失败，单线程重跑失败子目录以拿到完整报错"
+          echo "----- 失败时的资源状况 -----"
+          df -h || true
+          free -h || true
+          du -sh build_dir staging_dir dl bin 2>/dev/null || true
+
+          sub="$(grep -oE 'ERROR: [^ ]+ failed to build' ../build.log | tail -1 | awk '{print $2}')"
+          if [ -n "$sub" ]; then
+            echo "失败子目录: $sub"
+            timeout 3600 make -j1 V=s "$sub/install" 2>&1 | tee ../retry.log | tail -200
+          else
+            echo "日志里没找到 'ERROR: <子目录> failed to build'，退回整体单线程重跑"
+            timeout 3600 make -j1 V=s 2>&1 | tee ../retry.log | tail -200
+          fi
+
+          echo "----- 重跑后的资源状况 -----"
+          df -h || true
+          du -sh build_dir 2>/dev/null || true
+          exit 1
 
       - name: 收集产物
         id: art
@@ -265,6 +291,8 @@ jobs:
         if: failure()
         run: |
           [ -f build.log ] && tail -n 5000 build.log > build-tail.log || true
+          # 重跑日志里才是真正的报错，单独截一段带进诊断包（别整包上传，V=s 能到几百 MB）
+          [ -f retry.log ] && tail -n 3000 retry.log > retry-tail.log || true
 
       - name: 上传失败诊断包
         if: failure()
@@ -273,6 +301,7 @@ jobs:
           name: diag-${{ matrix.name }}-${{ github.run_id }}
           path: |
             build-tail.log
+            retry-tail.log
             openwrt/.config
             openwrt/.config.requested
             openwrt/logs/
