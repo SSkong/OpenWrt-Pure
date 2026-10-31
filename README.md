@@ -121,7 +121,6 @@ Scripts/
   H68K.sh              # 仅 H68K：应用设备支持补丁（带内核版本守卫）
   Fullcone.sh          # SONiC fullcone NAT 补丁（必须在 feeds install 之后、download 之前）
   VerifyPackages.sh    # 校验请求的包是否真的进了 .config（可本地单独跑）
-  Cache.sh             # 把 Go 编译缓存挪到可缓存的位置（必须在 defconfig 之前）
   CheckDevices.sh      # 设备矩阵 ↔ Config/<name>.config 交叉校验（离线）
   LintConfig.sh        # 配置离线 lint（重复符号 / 覆盖顺序 / 行语法）
 Patches/h68k/          # H68K 两个补丁
@@ -161,24 +160,27 @@ Patches/fullcone/      # fullcone 内核 + nftables/iptables/firewall4/LuCI 补�
 
 ### CI 缓存了什么
 
-| 缓存 | 路径 | key |
-|---|---|---|
-| 工具链 | `openwrt/staging_dir/host*`、`tool*` | `<设备>-<源码 commit>` |
-| Go 构建缓存（GOCACHE） | `.build-cache/go-build` | `go-build-<设备>-<源码 commit>` |
+只缓存**工具链**：`openwrt/staging_dir/host*` 与 `openwrt/staging_dir/tool*`，
+key = `<设备>-<源码 commit>`，`restore-keys` 回退同设备的旧缓存。
+恢复后必须刷新 stamp 时间戳，否则 make 认为 host/工具链未安装而重编
+（`find openwrt/staging_dir -type f -path "*/stamp/*" -not -path "*target*" -exec touch {} +`）。
 
-Go 的构建缓存默认落在「每次必丢」的位置，由 `Scripts/Cache.sh` 改出来：
+源码包和语言级编译缓存**都不缓存**：
 
-- Go：默认 `$(TMP_DIR)/go-build`，即 `openwrt/tmp`，全新 runner 恒为空。改成写 `.config` 里的 `CONFIG_GOLANG_BUILD_CACHE_DIR`（golang 自带的 kconfig string）。
-- Rust：**没有做缓存**。试过把 `CARGO_TARGET_DIR` 指到外部目录，结果产物不再落在包目录下的 `target/`，而不少 Rust 包的 Makefile 写死了这个相对路径（例如 smartdns-ui 的 `cp target/$(CARGO_BUILD_TARGET)/release/libsmartdns_ui.so ...`），cargo 照样成功、紧接着 `cp` 找不到文件，在编译 4 个多小时后失败（run 41108533638）。真要缓存应走 `CONFIG_RUST_SCCACHE`（`RUSTC_WRAPPER=sccache`，不改 target 目录，对包 Makefile 透明），但那要先在 runner 上装 sccache。
+- **`dl/` 不缓存**：重新下载只要几分钟，缓存它挤占配额不划算。
+- **Go 不缓存**：GOCACHE 回到默认的 `$(TMP_DIR)/go-build`（`openwrt/tmp`），每轮重编。
+  曾经把它指到外部目录并缓存过，可行，但那份配额换来的收益不值，已回退。
+- **Rust 不能按 target 目录缓存**：把 `CARGO_TARGET_DIR` 指到外部后，产物不再落在包
+  目录的 `target/`，而 smartdns-ui 这类包的 Makefile 写死了这个相对路径
+  （`cp target/$(CARGO_BUILD_TARGET)/release/libsmartdns_ui.so ...`），cargo 照样
+  "Finished"、紧接着 `cp` 找不到文件，编译 4 小时后失败（run 41108533638）。
+  真要缓存应走 `CONFIG_RUST_SCCACHE`（`RUSTC_WRAPPER=sccache`，不动 target 目录、
+  对包 Makefile 透明），但要先在 runner 上装 sccache。
 
-两个额外细节：
+**配额提醒**：仓库总配额 10GB，三设备全开是 3 份工具链。
+如果发现缓存被 LRU 反复淘汰（日志里明明没改源码却一直 cache miss），
+说明已经撑不住了，只能减少构建频率或缩小工具链缓存范围。
 
-- 恢复出来的 Go 缓存要整体 `touch` 一遍。go 会按最近使用时间清理构建缓存（5 天未用即删），`actions/cache` 恢复的文件带着归档时的 mtime，两次构建间隔超过 5 天就会被自己清空。缓存本身是内容寻址的，刷 mtime 只影响清理、不影响命中。
-- **不缓存 `dl/`**。源码 tarball 重新下载只要几分钟，缓存它挤占配额不划算。Go 模块缓存（`dl/go-mod-cache`）和 cargo registry（`dl/cargo`）也在 `dl/` 下，但都是内容寻址的，不缓存也不会让上面两个缓存失效——重新下载得到的字节完全一致，命中同样的哈希。
-
-工具链与 Go 缓存都在源码 commit 变动时自动失效（key 里带 `SRC_HASH`，`restore-keys` 允许回退到同设备的旧缓存）。
-
-**配额提醒**：仓库总配额 10GB，三设备全开是 3 份工具链 + 3 份 Go，构建末尾的「缓存体量统计」步骤会打印体量；如果发现缓存被 LRU 反复淘汰（日志里明明没改源码却一直 cache miss），优先保工具链那份。
 
 ## 如何确认一次构建是真的可用
 

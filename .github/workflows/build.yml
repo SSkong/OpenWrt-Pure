@@ -170,9 +170,6 @@ jobs:
           cd openwrt
           cat ../Config/base.config "../Config/${{ matrix.name }}.config" > .config
           bash ../Scripts/Settings.sh . "${{ matrix.name }}"
-          # 必须在 defconfig 之前：往 .config 写 CONFIG_GOLANG_BUILD_CACHE_DIR，
-          # 并给 rust-values.mk 追加 CARGO_TARGET_DIR（详见 Scripts/Cache.sh 头部说明）
-          bash ../Scripts/Cache.sh . "$GITHUB_WORKSPACE/.build-cache"
           cp .config .config.requested
           make defconfig
 
@@ -198,27 +195,6 @@ jobs:
           # 第一次命中就在编译前把 job 炸了。改成单条 find + 一次 -exec ... +。
           find openwrt/staging_dir -type f -path "*/stamp/*" -not -path "*target*" -exec touch {} +
           echo "工具链缓存已激活"
-
-      - name: 恢复 Go 编译缓存
-        # Go 默认的 GOCACHE 是 $(TMP_DIR)/go-build（openwrt/tmp），全新 runner 上恒为空；
-        # Scripts/Cache.sh 已把它改到 .build-cache/go-build。
-        id: gocache
-        uses: actions/cache@v4
-        with:
-          path: .build-cache/go-build
-          key: go-build-${{ matrix.name }}-${{ env.SRC_HASH }}
-          restore-keys: |
-            go-build-${{ matrix.name }}-
-
-      - name: 激活缓存的 Go 构建缓存
-        # go 会按「最近使用时间」清理构建缓存：超过 5 天没被用过的条目，会在下一次写入时
-        # 被整批删掉。actions/cache 恢复出来的文件带着归档时刻的 mtime，两次构建间隔超过
-        # 5 天时，缓存会在刚开编就被 go 自己清空 —— 这里统一刷新 mtime 标成「刚用过」。
-        # 缓存是内容寻址的（条目名就是 actionID 哈希），改 mtime 不影响命中，只影响清理。
-        if: steps.gocache.outputs.cache-hit == 'true'
-        run: |
-          find .build-cache/go-build -type f -exec touch {} +
-          echo "Go 构建缓存已激活：$(find .build-cache/go-build -type f | wc -l) 个条目"
 
       - name: 校验自定义包是否真实生效
         # 逻辑抽在 Scripts/VerifyPackages.sh，可本地单独跑：
@@ -250,11 +226,6 @@ jobs:
             timeout 1800 make -j1 V=s 2>&1 | tail -200
             exit 1
           }
-
-      - name: 缓存体量统计
-        # 仓库级缓存配额 10GB，这里看一眼 Go/Rust 缓存涨到多大，方便判断要不要裁剪
-        if: always()
-        run: du -sh .build-cache/* 2>/dev/null | sort -h || true
 
       - name: 收集产物
         id: art
