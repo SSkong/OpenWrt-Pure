@@ -1,0 +1,31 @@
+name: Validate
+
+# 构建前的静态关卡：几十秒跑完，挡掉那些「要编译两小时才暴露」的低级错误。
+# 全部检查收在 scripts/doctor.sh 一个入口里，本地运行同一条命令即可：
+#   bash scripts/doctor.sh
+#
+# 覆盖：脚本语法 / devices.json 合法性 / 设备矩阵 ↔ 设备配置 / 配置 lint / 补丁行尾
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: 静态校验
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出本仓库
+        uses: actions/checkout@v4
+
+      - name: 静态自检
+        run: bash scripts/doctor.sh

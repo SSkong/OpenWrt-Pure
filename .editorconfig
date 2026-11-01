@@ -1,0 +1,28 @@
+root = true
+
+# 统一 LF + UTF-8：CRLF 的 shell 脚本在 Linux 上会报 "bad interpreter ...^M"，
+# CRLF 的补丁会以 "context does not match" 静默打不上。.gitattributes 负责入库，
+# 这里负责编辑器保存时不出岔子。
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.sh]
+indent_style = tab
+indent_size = 4
+
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+# 补丁的上下文逐字节敏感：不缩进、不补末尾换行、不去尾随空白
+[*.patch]
+indent_style = unset
+indent_size = unset
+insert_final_newline = unset
+trim_trailing_whitespace = false

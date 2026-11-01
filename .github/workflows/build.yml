@@ -1,0 +1,287 @@
+name: Build OpenWrt
+
+# 纯净 OpenWrt 源码编译：官方 25.12 + 自定义软件包
+# 设备矩阵见 config/devices.json（X86 / BPI-R4 / H68K）
+# 内核：除 H68K 设备支持补丁与 SONiC fullcone 外不做任何改动
+#
+# 步骤里的复杂逻辑都放在 scripts/ 下，本地可用同样的命令复现：
+#   scripts/doctor.sh                                   静态自检（不需要源码树）
+#   scripts/check-devices.sh                            设备矩阵 ↔ 设备配置
+#   scripts/lint-config.sh                              配置 lint
+#   scripts/fetch-packages.sh openwrt                   克隆上游包
+#   scripts/patch-fullcone.sh openwrt patches/fullcone  fullcone 补丁
+#   scripts/patch-h68k.sh openwrt patches/h68k          H68K 设备补丁
+#   scripts/setup-device.sh openwrt x86                 默认 IP / 主机名
+#   scripts/check-packages.sh openwrt x86               包是否真的进了 .config
+#   scripts/build.sh openwrt                            编译 + 失败定位
+#   scripts/collect-artifacts.sh openwrt x86 x86/64 out 收集产物
+
+on:
+  workflow_dispatch:
+    inputs:
+      devices:
+        description: "设备（逗号分隔：x86,bpi-r4,h68k；留空=全部）"
+        required: false
+        type: string
+        default: ""
+      version:
+        description: "OpenWrt 版本（如 25.12.6；留空=最新 25.12.x）"
+        required: false
+        type: string
+        default: ""
+      publish:
+        description: "构建完成后发布到 Release"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    name: 解析版本与设备矩阵
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: 检出本仓库
+        uses: actions/checkout@v4
+
+      - name: 解析 OpenWrt 版本
+        id: v
+        run: |
+          req="${{ inputs.version }}"
+          [ -n "$req" ] || req="25.12"
+          if [[ "$req" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            ver="$req"
+          else
+            ver=$(curl -fsSL --retry 3 https://downloads.openwrt.org/releases/ \
+              | grep -oE 'href="[0-9]+\.[0-9]+\.[0-9]+/"' | sed 's/href="//;s#/##;s/"//' \
+              | grep -E "^${req//./\\.}\." | sort -V | tail -n 1)
+          fi
+          [ -n "$ver" ] || { echo "ERROR: 无法解析版本 $req" >&2; exit 1; }
+          echo "使用 OpenWrt v${ver}"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      # 设备矩阵的唯一事实来源是 config/devices.json；新增设备只需改它 + config/<name>.config
+      - name: 生成设备矩阵
+        id: m
+        run: |
+          sel="${{ inputs.devices }}"
+          sel=$(echo "$sel" | tr 'A-Z' 'a-z' | tr '，' ',' | tr -d ' ')
+          if [ -z "$sel" ]; then
+            echo "matrix=$(jq -c '{include:.}' config/devices.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix=$(jq -c --arg s "$sel" '{include:[.[]|select(.name as $n | ($s|split(",")|index($n)))]}' config/devices.json)" >> "$GITHUB_OUTPUT"
+          fi
+          echo "names=$sel" >> "$GITHUB_OUTPUT"
+          echo "选定设备: ${sel:-（全部）}"
+
+      - name: 校验设备矩阵与配置一致
+        run: bash scripts/check-devices.sh "${{ steps.m.outputs.names }}"
+
+  build:
+    name: ${{ matrix.label }}
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+
+    steps:
+      # 必须先于 checkout：这个 action 会清空工作区
+      - name: 清理磁盘
+        uses: smallprogram/maximize-build-space@16007771e4642069097fc3e7444638474e5db178
+        with:
+          root-reserve-mb: 5120
+          temp-reserve-mb: 4096
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+
+      - name: 检出本仓库
+        uses: actions/checkout@v4
+
+      - name: 安装编译依赖
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          printf 'tries = 5\nwaitretry = 5\ntimeout = 30\nretry-connrefused = on\n' > ~/.wgetrc
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y --no-install-recommends \
+            ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar file flex \
+            g++-multilib gawk gcc-multilib genisoimage gettext git help2man intltool \
+            libelf-dev libncurses-dev libssl-dev libtool libxml-parser-perl lld \
+            llvm make ncurses-term ninja-build patch pkg-config python3 python3-dev \
+            python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools \
+            subversion swig time uglifyjs unzip upx-ucl wget xz-utils zip zlib1g-dev zstd
+
+      - name: 准备 BPF 宿主工具链
+        # dae / daed 会 include bpf.mk，USE_LLVM_HOST 模式下它按「不带版本号」的
+        # clang / llc / opt / llvm-dis / llvm-strip 去 PATH 里找（见 include/bpf.mk 的
+        # find-llvm-tool），而 Ubuntu 默认只装带版本号的（clang-18、llc-18…）。
+        # 这里把实际 LLVM 目录里的工具软链到 /usr/local/bin；缺任何一个，dae/daed 编
+        # eBPF 时都会失败。
+        run: |
+          set -euo pipefail
+          llvm_bin="$(dirname "$(readlink -f "$(command -v clang)")")"
+          echo "LLVM 工具目录: $llvm_bin"
+          linked=0
+          for t in clang llc opt llvm-dis llvm-strip llvm-ar llvm-nm llvm-objcopy llvm-ranlib; do
+            if [ -x "$llvm_bin/$t" ]; then
+              sudo ln -sf "$llvm_bin/$t" "/usr/local/bin/$t"
+              linked=$((linked + 1))
+            fi
+          done
+          echo "已建立 $linked 个软链"
+          clang --version | head -1
+          for t in llc opt llvm-dis llvm-strip; do
+            command -v "$t" >/dev/null 2>&1 || echo "::warning::BPF 工具链缺少 $t，dae/daed 编译可能失败"
+          done
+
+      - name: 克隆 OpenWrt 源码（官方）
+        run: |
+          git clone -q --depth 1 -b "v${{ needs.setup.outputs.version }}" \
+            https://github.com/openwrt/openwrt.git openwrt
+          cd openwrt
+          echo "源码 commit: $(git rev-parse --short HEAD)"
+          echo "SRC_HASH=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: H68K 设备支持补丁
+        if: matrix.name == 'h68k'
+        run: bash scripts/patch-h68k.sh openwrt "$PWD/patches/h68k"
+
+      - name: 更新 feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 引入自定义软件包
+        run: bash scripts/fetch-packages.sh openwrt
+
+      - name: SONiC fullcone NAT 补丁
+        # 必须晚于 feeds install（LuCI 补丁要落到 feeds/luci/applications/luci-app-firewall/），
+        # 且早于 make download（libnftnl 补丁带着 PKG_FIXUP:=autoreconf 重新生成构建系统）
+        run: bash scripts/patch-fullcone.sh openwrt "$PWD/patches/fullcone"
+
+      - name: 应用配置
+        run: |
+          cd openwrt
+          cat ../config/base.config "../config/${{ matrix.name }}.config" > .config
+          bash ../scripts/setup-device.sh . "${{ matrix.name }}"
+          cp .config .config.requested
+          make defconfig
+
+      - name: 恢复编译缓存
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            openwrt/staging_dir/host*
+            openwrt/staging_dir/tool*
+          key: ${{ matrix.name }}-${{ env.SRC_HASH }}
+          restore-keys: |
+            ${{ matrix.name }}-
+
+      - name: 激活缓存的工具链
+        # 缓存恢复后必须刷新 stamp 时间戳，否则 make 认为 host/工具链未安装而重编
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: |
+          # 别写成嵌套 `find ... -exec find {} ... -exec touch {} + \;`：-exec ... + 只允许
+          # 一个 {}，GNU find 会直接报错并返回 1
+          find openwrt/staging_dir -type f -path "*/stamp/*" -not -path "*target*" -exec touch {} +
+          echo "工具链缓存已激活"
+
+      - name: 校验自定义包是否真实生效
+        run: bash scripts/check-packages.sh openwrt "${{ matrix.name }}"
+
+      - name: 下载源码包
+        run: |
+          cd openwrt
+          # 并行下载失败多半是上游网络抖动，单线程补一次；只有补完仍失败才算真问题
+          if make -j16 download > /tmp/dl1.log 2>&1; then
+            echo "下载完成"
+          elif make -j1 download > /tmp/dl2.log 2>&1; then
+            echo "下载完成（重试后全部成功）"
+          else
+            echo "::warning::仍有源码包下载失败，编译阶段会再试一次"
+            grep -iE "error|failed|cannot" /tmp/dl2.log | tail -20 || true
+          fi
+
+      # 编译、资源心跳、失败定位都在 scripts/build.sh：并行 make 的出错现场常被吞成
+      # 一行 "ERROR: <子目录> failed to build."，脚本会只对该子目录单线程重跑拿完整报错
+      - name: 编译
+        run: bash scripts/build.sh openwrt "$GITHUB_WORKSPACE"
+
+      - name: 收集产物
+        run: bash scripts/collect-artifacts.sh openwrt "${{ matrix.name }}" "${{ matrix.target }}" "artifact/${{ matrix.name }}"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ matrix.name }}-${{ needs.setup.outputs.version }}
+          path: artifact/${{ matrix.name }}/*
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: 截断构建日志
+        if: failure()
+        run: |
+          [ -f build.log ] && tail -n 5000 build.log > build-tail.log || true
+          # 重跑日志里才是真正的报错，单独截一段带进诊断包（别整包上传，V=s 能到几百 MB）
+          [ -f retry.log ] && tail -n 3000 retry.log > retry-tail.log || true
+
+      - name: 上传失败诊断包
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-${{ matrix.name }}-${{ github.run_id }}
+          path: |
+            build-tail.log
+            retry-tail.log
+            usage.log
+            openwrt/.config
+            openwrt/.config.requested
+            openwrt/logs/
+            openwrt/bin/targets/**/*.manifest
+          retention-days: 7
+          if-no-files-found: warn
+
+  # 发布单独成一个 job：三个设备并行时，如果各自去创建同一个 tag 的 Release，
+  # ncipollo/release-action 的 replacesArtifacts 会互相删掉对方刚上传的文件，
+  # 最终只留下最后完成的那一个设备。汇总到单个 job 后串行上传才稳定。
+  publish:
+    name: 汇总发布
+    needs: [setup, build]
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 下载全部设备产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 列出待发布文件
+        run: ls -lh dist
+
+      - name: 发布到 Release
+        uses: ncipollo/release-action@v1
+        with:
+          name: OpenWrt ${{ needs.setup.outputs.version }}
+          tag: v${{ needs.setup.outputs.version }}
+          commit: ${{ github.sha }}
+          allowUpdates: true
+          replacesArtifacts: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: dist/*

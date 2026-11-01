@@ -1,0 +1,11 @@
+# 本地构建产物（CI 里这些路径在 job 沙箱内，不进仓库）
+openwrt/
+artifact/
+build_*/
+*.log
+
+# 编辑器 / 系统垃圾
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
