@@ -1,7 +1,7 @@
 name: diag-vlmcsd
 
-# 一次性：只编 vlmcsd 一个包，带 V=s 拿到被 make -j 吞掉的真实报错。
-# 用完即删。
+# 一次性：查清 vlmcsd 在 ccache 下报 "cannot specify '-o' with '-c' ... with multiple files"
+# 的真实命令与 ccache 行为。用完即删。
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ jobs:
   one:
     name: 单包编译
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
 
     env:
       CCACHE_MAXSIZE: 2G
@@ -34,7 +34,7 @@ jobs:
             libelf-dev libncurses-dev libssl-dev libtool libxml-parser-perl lld \
             llvm make ncurses-term ninja-build patch pkg-config python3 python3-dev \
             python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools \
-            subversion swig time uglifyjs unzip upx-ucl wget xz-utils zip zlib1g-dev zstd 2>/dev/null || true
+            subversion swig time uglifyjs unzip upx-ucl wget xz-utils zip zlib1g-dev zstd
 
       - name: 检出本仓库
         uses: actions/checkout@v7
@@ -61,7 +61,6 @@ jobs:
           bash ../scripts/setup-device.sh . x86
           cp .config .config.requested
           make defconfig
-          grep -E "^CONFIG_CCACHE|vlmcsd" .config || true
 
       - name: 恢复工具链缓存
         id: cache
@@ -80,26 +79,44 @@ jobs:
           find openwrt/staging_dir -type f -path "*/stamp/*" -not -path "*target*" -exec touch {} +
           echo "工具链缓存已激活"
 
-      - name: 用顶层目标编译（V=s）
+      - name: A. ccache 与编译器的版本/行为
+        run: |
+          cd openwrt
+          echo "--- which ccache ---"
+          type -a ccache
+          ccache --version | head -2
+          staging_dir/host/bin/ccache --version 2>/dev/null | head -2 || true
+          cc="$(ls staging_dir/toolchain-*/bin/*-openwrt-linux-musl-gcc | head -1)"
+          echo "--- CC = $cc ---"
+          echo "--- 直接调 gcc -v ---"
+          "$cc" -v 2>&1 | grep -E "^Target:|^gcc version" || true
+          echo "--- 经 ccache 调 gcc -v ---"
+          staging_dir/host/bin/ccache "$cc" -v 2>&1 | head -8 || true
+          echo "--- TARGETPLATFORM 解析结果 ---"
+          staging_dir/host/bin/ccache "$cc" -v 2>&1 | grep '^Target: ' | cut -f 2 -d ' ' || echo "(空)"
+
+      - name: B. VERBOSE=1 看真实命令行
         run: |
           cd openwrt
           set +e
-          timeout 3000 make -j1 V=s package/custom/luci-app-vlmcsd/vlmcsd/compile > /tmp/a.log 2>&1
-          echo "rc_a=$?"
-          tail -60 /tmp/a.log
-          if [ -s /tmp/a.log ] && grep -q "No rule to make target" /tmp/a.log; then
-            echo "===== 顶层没有该目标，改在目录内编译（带 TOPDIR）====="
-            timeout 3000 make -C package/custom/luci-app-vlmcsd/vlmcsd -r -j1 V=s TOPDIR="$PWD" compile > /tmp/b.log 2>&1
-            echo "rc_b=$?"
-            tail -80 /tmp/b.log
-          fi
-          echo "===== build_dir ====="
-          ls -d build_dir/target-*/vlmcsd* 2>/dev/null || echo "(无)"
-          ls build_dir/target-*/vlmcsd/bin 2>/dev/null || true
-          echo "===== ccache ====="
-          type -a ccache | head -3
-          ccache --version | head -2
-          exit 0
+          timeout 3000 make -j1 V=s VERBOSE=1 package/custom/luci-app-vlmcsd/vlmcsd/compile > /tmp/b.log 2>&1
+          echo "rc_b=$?"
+          grep -nE "cannot specify|\-c \.\./|gcc .*kms\.c" /tmp/b.log | head -10
+          echo "----- 前 60 行 -----"
+          head -60 /tmp/b.log
+
+      - name: C. 关掉 ccache 再编一次
+        run: |
+          cd openwrt
+          sed -i 's/^CONFIG_CCACHE=y/# CONFIG_CCACHE=y/' .config
+          make defconfig >/dev/null 2>&1
+          grep -E "^# CONFIG_CCACHE|^CONFIG_CCACHE" .config | head -3 || echo "(ccache 未出现在 .config)"
+          make package/custom/luci-app-vlmcsd/vlmcsd/clean >/dev/null 2>&1 || true
+          set +e
+          timeout 3000 make -j1 V=s VERBOSE=1 package/custom/luci-app-vlmcsd/vlmcsd/compile > /tmp/c.log 2>&1
+          echo "rc_c=$?"
+          grep -nE "cannot specify|openwrt-linux-musl-gcc .*\.c" /tmp/c.log | head -5
+          tail -15 /tmp/c.log
 
       - name: 上传日志
         if: always()
@@ -107,6 +124,6 @@ jobs:
         with:
           name: diag-vlmcsd-log
           path: |
-            /tmp/a.log
             /tmp/b.log
+            /tmp/c.log
           retention-days: 3
