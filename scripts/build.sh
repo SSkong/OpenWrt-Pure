@@ -9,6 +9,11 @@
 #      能直接走到出错点）；找不到就退回整体重跑
 #   3. 重跑的完整输出写 retry.log，CI 里截尾部作为诊断包
 #
+# 重跑先 compile 后 install，两段都要看：编译错误在 compile 段，打包/安装错误在
+# install 段。嵌套包目录（package/custom/<仓库>/<包>）在顶层 make 里不一定有
+# install 目标，报 "No rule to make target" 时退回该目录内直接 make —— make[3]
+# 本来就是这么调的，compile 规则必定存在。
+#
 # 用法：scripts/build.sh <openwrt目录> [日志目录（默认仓库根）]
 # 退出码：0 成功 / 1 失败（日志已落在日志目录）
 # ==============================================================================
@@ -24,6 +29,8 @@ ensure_dir "$LOG"
 BUILD_LOG="$LOG/build.log"
 USAGE_LOG="$LOG/usage.log"
 RETRY_LOG="$LOG/retry.log"
+# 只保留最近一次重跑的输出，用来判断「顶层没有这个目标」这类一次性结论
+STEP_LOG="$LOG/retry-step.log"
 enter "$WIN"
 
 # 资源心跳：单独写一个文件，不跟 make 抢 build.log。
@@ -70,12 +77,36 @@ resources
 # 注意末尾的 || true：找不到匹配时 grep 退出 1，在 set -e 语义下会直接把这一步
 # 结束掉，后面「有没有子目录」的分支就跑不到了。
 sub_dir="$(grep -oE 'ERROR: [^ ]+ failed to build' "$BUILD_LOG" | tail -1 | awk '{print $2}' || true)"
+: > "$RETRY_LOG"
+
+# 一次重跑：输出同进 retry.log（累积）与 retry-step.log（只本次），回显尾部 200 行
+retry_once() {
+	: > "$STEP_LOG"
+	timeout 3600 "$@" 2>&1 | tee -a "$RETRY_LOG" "$STEP_LOG" | tail -200
+	return "${PIPESTATUS[0]}"
+}
+
+# 顶层目标对包目录是 <dir>/compile、<dir>/install；嵌套包目录在顶层可能没有
+# install 规则，那就进目录自己 make
+retry_target() {
+	local t="$1"
+	retry_once make -j1 V=s "$sub_dir/$t" && return 0
+	if grep -q "No rule to make target" "$STEP_LOG"; then
+		echo "顶层没有 $sub_dir/$t，改为在该目录内 make" | tee -a "$RETRY_LOG"
+		retry_once make -C "$sub_dir" -r -j1 V=s "$t" && return 0
+	fi
+	return 1
+}
+
 if [ -n "$sub_dir" ]; then
 	echo "失败子目录: $sub_dir"
-	timeout 3600 make -j1 V=s "$sub_dir/install" 2>&1 | tee "$RETRY_LOG" | tail -200
+	for t in compile install; do
+		step "重跑 $sub_dir/$t"
+		retry_target "$t" || break
+	done
 else
 	echo "日志里没找到 'ERROR: <子目录> failed to build'，退回整体单线程重跑"
-	timeout 3600 make -j1 V=s 2>&1 | tee "$RETRY_LOG" | tail -200
+	retry_once make -j1 V=s
 fi
 
 echo "----- 重跑后的资源状况 -----"
