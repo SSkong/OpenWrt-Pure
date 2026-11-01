@@ -193,6 +193,39 @@ patch_vendor() {
 		warn "smartdns: 未找到 $SMARTDNS_MK，跳过 hash 修正"
 	fi
 
+	# ---------- vlmcsd：让本包绕开 ccache ----------
+	# 它的 BASECFLAGS 里有 -DVLMCSD_COMPILER=\"$(notdir $(CC))\"。转义引号在 shell 里不构成
+	# 引用，所以 CC 一旦带空格（CONFIG_CCACHE 会把它写成 "ccache <gcc>"），编译器名就被切成
+	# 两个词，第二个词被 gcc 当成源文件：
+	#   fatal error: cannot specify '-o' with '-c', '-S' or '-E' with multiple files
+	# 这个包只有十几个源文件，ccache 收益为零，直接给它不带前缀的编译器。
+	VLM_MK="package/custom/luci-app-vlmcsd/vlmcsd/Makefile"
+	VLM_MARK='MAKE_FLAGS += CC="$(TARGET_CROSS)gcc"'
+	if [ -f "$VLM_MK" ]; then
+		if has_text "$VLM_MARK" "$VLM_MK"; then
+			sub "vlmcsd: CC 覆盖已存在"
+		elif has_text 'define Package/vlmcsd/install' "$VLM_MK"; then
+			# 插在 install 宏之前 = MAKE_FLAGS 追加之后，命令行上后出现的 CC 覆盖
+			# package.mk 给的那个（"ccache <gcc>"）
+			awk -v mark="$VLM_MARK" '
+				/^define Package\/vlmcsd\/install/ {
+					print "# 本包把编译器名写进 -DVLMCSD_COMPILER，CC 带空格会被 shell 切词，故绕开 ccache"
+					print mark
+					print ""
+				}
+				{ print }
+			' "$VLM_MK" > "$VLM_MK.tmp" && mv "$VLM_MK.tmp" "$VLM_MK" ||
+				{ rm -f "$VLM_MK.tmp"; die "vlmcsd: 写入 CC 覆盖失败"; }
+			has_text "$VLM_MARK" "$VLM_MK" ||
+				die "vlmcsd: CC 覆盖没写进去（$VLM_MK）"
+			sub "vlmcsd: 已改用不带 ccache 前缀的 CC"
+		else
+			warn "vlmcsd: $VLM_MK 里找不到 'define Package/vlmcsd/install'，上游结构可能已变"
+		fi
+	else
+		warn "vlmcsd: 未找到 $VLM_MK，跳过 ccache 修正"
+	fi
+
 	# ---------- languard 的 postinst 从「文件」补成「宏」----------
 	# 上游把安装后动作写成仓库根目录的 postinst / prerm / postrm 文件，但 OpenWrt 只认
 	# Package/<name>/postinst 这种 make 宏——include/package-pack.mk 的 BuildPackVariable

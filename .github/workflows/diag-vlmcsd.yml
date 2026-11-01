@@ -1,7 +1,7 @@
 name: diag-vlmcsd
 
-# 一次性：查清 vlmcsd 在 ccache 下报 "cannot specify '-o' with '-c' ... with multiple files"
-# 的真实命令与 ccache 行为。用完即删。
+# 一次性：验证 fetch-packages.sh 的 vlmcsd 修正后，ccache 开着也能编过。
+# 用完即删。
 
 on:
   workflow_dispatch:
@@ -51,8 +51,15 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 引入自定义软件包
+      - name: 引入自定义软件包（含 vlmcsd 修正）
         run: bash scripts/fetch-packages.sh openwrt
+
+      - name: 确认修正已落到 Makefile
+        run: |
+          sed -n '30,40p' openwrt/package/custom/luci-app-vlmcsd/vlmcsd/Makefile
+          grep -q 'MAKE_FLAGS += CC="$(TARGET_CROSS)gcc"' \
+            openwrt/package/custom/luci-app-vlmcsd/vlmcsd/Makefile &&
+            echo "CC 覆盖存在" || { echo "CC 覆盖缺失"; exit 1; }
 
       - name: 应用配置
         run: |
@@ -61,6 +68,7 @@ jobs:
           bash ../scripts/setup-device.sh . x86
           cp .config .config.requested
           make defconfig
+          grep -E "^CONFIG_CCACHE" .config || echo "(ccache 未开)"
 
       - name: 恢复工具链缓存
         id: cache
@@ -79,51 +87,21 @@ jobs:
           find openwrt/staging_dir -type f -path "*/stamp/*" -not -path "*target*" -exec touch {} +
           echo "工具链缓存已激活"
 
-      - name: A. ccache 与编译器的版本/行为
-        run: |
-          cd openwrt
-          echo "--- which ccache ---"
-          type -a ccache
-          ccache --version | head -2
-          staging_dir/host/bin/ccache --version 2>/dev/null | head -2 || true
-          cc="$(ls staging_dir/toolchain-*/bin/*-openwrt-linux-musl-gcc | head -1)"
-          echo "--- CC = $cc ---"
-          echo "--- 直接调 gcc -v ---"
-          "$cc" -v 2>&1 | grep -E "^Target:|^gcc version" || true
-          echo "--- 经 ccache 调 gcc -v ---"
-          staging_dir/host/bin/ccache "$cc" -v 2>&1 | head -8 || true
-          echo "--- TARGETPLATFORM 解析结果 ---"
-          staging_dir/host/bin/ccache "$cc" -v 2>&1 | grep '^Target: ' | cut -f 2 -d ' ' || echo "(空)"
-
-      - name: B. VERBOSE=1 看真实命令行
+      - name: 编译（ccache 开启，V=s）
         run: |
           cd openwrt
           set +e
-          timeout 3000 make -j1 V=s VERBOSE=1 package/custom/luci-app-vlmcsd/vlmcsd/compile > /tmp/b.log 2>&1
-          echo "rc_b=$?"
-          grep -nE "cannot specify|\-c \.\./|gcc .*kms\.c" /tmp/b.log | head -10
-          echo "----- 前 60 行 -----"
-          head -60 /tmp/b.log
-
-      - name: C. 关掉 ccache 再编一次
-        run: |
-          cd openwrt
-          sed -i 's/^CONFIG_CCACHE=y/# CONFIG_CCACHE=y/' .config
-          make defconfig >/dev/null 2>&1
-          grep -E "^# CONFIG_CCACHE|^CONFIG_CCACHE" .config | head -3 || echo "(ccache 未出现在 .config)"
-          make package/custom/luci-app-vlmcsd/vlmcsd/clean >/dev/null 2>&1 || true
-          set +e
-          timeout 3000 make -j1 V=s VERBOSE=1 package/custom/luci-app-vlmcsd/vlmcsd/compile > /tmp/c.log 2>&1
-          echo "rc_c=$?"
-          grep -nE "cannot specify|openwrt-linux-musl-gcc .*\.c" /tmp/c.log | head -5
-          tail -15 /tmp/c.log
+          timeout 3000 make -j1 V=s package/custom/luci-app-vlmcsd/vlmcsd/compile > /tmp/a.log 2>&1
+          echo "rc=$?"
+          grep -nE "cannot specify|Error [0-9]|openwrt-linux-musl-gcc -x" /tmp/a.log | head -8
+          tail -20 /tmp/a.log
+          ls -l build_dir/target-*/vlmcsd/bin 2>/dev/null | head
+          exit 0
 
       - name: 上传日志
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: diag-vlmcsd-log
-          path: |
-            /tmp/b.log
-            /tmp/c.log
+          path: /tmp/a.log
           retention-days: 3
