@@ -87,13 +87,14 @@ retry_once() {
 }
 
 # 顶层目标对包目录是 <dir>/compile、<dir>/install；嵌套包目录在顶层可能没有
-# install 规则，那就进目录自己 make
+# install 规则，那就进目录自己 make —— 必须显式传 TOPDIR，否则 rules.mk 里的
+# include $(TOPDIR)/package.mk 会展开成 /package.mk
 retry_target() {
 	local t="$1"
 	retry_once make -j1 V=s "$sub_dir/$t" && return 0
 	if grep -q "No rule to make target" "$STEP_LOG"; then
 		echo "顶层没有 $sub_dir/$t，改为在该目录内 make" | tee -a "$RETRY_LOG"
-		retry_once make -C "$sub_dir" -r -j1 V=s "$t" && return 0
+		retry_once make -C "$sub_dir" -r -j1 V=s TOPDIR="$PWD" "$t" && return 0
 	fi
 	return 1
 }

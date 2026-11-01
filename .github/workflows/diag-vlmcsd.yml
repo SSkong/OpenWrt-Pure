@@ -34,7 +34,7 @@ jobs:
             libelf-dev libncurses-dev libssl-dev libtool libxml-parser-perl lld \
             llvm make ncurses-term ninja-build patch pkg-config python3 python3-dev \
             python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools \
-            subversion swig time uglifyjs unzip upx-ucl wget xz-utils zip zlib1g-dev zstd
+            subversion swig time uglifyjs unzip upx-ucl wget xz-utils zip zlib1g-dev zstd 2>/dev/null || true
 
       - name: 检出本仓库
         uses: actions/checkout@v7
@@ -61,7 +61,7 @@ jobs:
           bash ../scripts/setup-device.sh . x86
           cp .config .config.requested
           make defconfig
-          grep -E "^CONFIG_CCACHE|^CONFIG_PACKAGE_vlmcsd" .config || true
+          grep -E "^CONFIG_CCACHE|vlmcsd" .config || true
 
       - name: 恢复工具链缓存
         id: cache
@@ -80,23 +80,25 @@ jobs:
           find openwrt/staging_dir -type f -path "*/stamp/*" -not -path "*target*" -exec touch {} +
           echo "工具链缓存已激活"
 
-      - name: 编译 vlmcsd（V=s）
+      - name: 用顶层目标编译（V=s）
         run: |
           cd openwrt
           set +e
-          make -C package/custom/luci-app-vlmcsd/vlmcsd V=s compile > /tmp/v1.log 2>&1
-          rc=$?
-          echo "rc=$rc"
-          echo "===== 尾部 120 行 ====="
-          tail -120 /tmp/v1.log
-          echo "===== 错误行 ====="
-          grep -nE "error|Error|No such|cannot|not found|undefined" /tmp/v1.log | tail -40
+          timeout 3000 make -j1 V=s package/custom/luci-app-vlmcsd/vlmcsd/compile > /tmp/a.log 2>&1
+          echo "rc_a=$?"
+          tail -60 /tmp/a.log
+          if [ -s /tmp/a.log ] && grep -q "No rule to make target" /tmp/a.log; then
+            echo "===== 顶层没有该目标，改在目录内编译（带 TOPDIR）====="
+            timeout 3000 make -C package/custom/luci-app-vlmcsd/vlmcsd -r -j1 V=s TOPDIR="$PWD" compile > /tmp/b.log 2>&1
+            echo "rc_b=$?"
+            tail -80 /tmp/b.log
+          fi
+          echo "===== build_dir ====="
+          ls -d build_dir/target-*/vlmcsd* 2>/dev/null || echo "(无)"
+          ls build_dir/target-*/vlmcsd/bin 2>/dev/null || true
           echo "===== ccache ====="
+          type -a ccache | head -3
           ccache --version | head -2
-          CCACHE_DIR="$PWD/.ccache" ccache -s || true
-          echo "===== 编译器事实 ====="
-          staging_dir/host/bin/ccache --version 2>/dev/null | head -2 || true
-          find build_dir -maxdepth 2 -name "vlmcsd*" -o -maxdepth 2 -name "target-*" | head
           exit 0
 
       - name: 上传日志
@@ -104,5 +106,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: diag-vlmcsd-log
-          path: /tmp/v1.log
+          path: |
+            /tmp/a.log
+            /tmp/b.log
           retention-days: 3
