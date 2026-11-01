@@ -29,6 +29,14 @@ patches/   设备/内核补丁            .github/   两条 workflow
 
 每个设备一个 artifact；`publish` 打开时由独立的 `publish` job 汇总发布到 `v<版本>`，产物含镜像、引导件、`*.manifest` 与 `sha256sums-<设备>.txt`。
 
+同一版本号会被重复构建，所以发布是**覆盖**语义（`scripts/publish-release.sh`）：
+
+- 同名资产覆盖上传；
+- 这次没产出的旧资产会被删掉 —— 否则改完配置再发版，Release 上会同时挂着新旧两批固件，下载的人拿到哪批全看运气；
+- 产物来源的 commit 写在 Release 说明里。
+
+**标签不会跟着产物移动。** `GITHUB_TOKEN` 不允许把 ref 指向「改动过 `.github/workflows/` 的 commit」：`git push` 直接报 `refusing to allow a GitHub App to create or update workflow`，换成 REST API 更新 ref 也是同样的 403，而 `workflows` 权限并不在 workflow 能声明的 `permissions` 列表里。本仓库几乎每个 commit 都动过 workflow，所以这条路是死的。要让标签始终指向产物对应的源码，只能引入带 `workflow` scope 的 PAT。
+
 **本地自检**（不需要源码树，几十秒）：
 
 ```bash
@@ -61,8 +69,10 @@ scripts/
   check-packages.sh    # 校验请求的包是否真的进了 .config
   build.sh             # 编译 + 资源心跳 + 失败定位
   collect-artifacts.sh # 从 bin/targets 收集镜像/引导件/manifest + 校验和
+  publish-release.sh   # 发布到 Release：覆盖同名资产、清掉这次没产出的旧资产
 .github/workflows/
   build.yml            # 三设备矩阵构建 → 汇总发布
+  republish.yml        # 不重编，把某次构建的 artifact 重新发布（发布失败时用）
   validate.yml         # push/PR 静态校验
 .gitattributes         # 强制 LF
 .editorconfig          # 缩进 / 行尾 / 编码约定

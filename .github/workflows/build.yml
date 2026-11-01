@@ -57,7 +57,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
     steps:
       - name: 检出本仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 解析 OpenWrt 版本
         id: v
@@ -125,7 +125,7 @@ jobs:
           remove-codeql: "true"
 
       - name: 检出本仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装编译依赖
         env:
@@ -201,7 +201,7 @@ jobs:
 
       - name: 恢复编译缓存
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             openwrt/staging_dir/host*
@@ -226,7 +226,7 @@ jobs:
       # 会让第一轮之后新编出的对象永远存不进去。
       - name: 恢复 ccache
         id: cc
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: openwrt/.ccache
           key: ${{ matrix.name }}-ccache-${{ env.SRC_HASH }}-${{ github.run_id }}
@@ -261,7 +261,7 @@ jobs:
         run: bash scripts/collect-artifacts.sh openwrt "${{ matrix.name }}" "${{ matrix.target }}" "artifact/${{ matrix.name }}"
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openwrt-${{ matrix.name }}-${{ needs.setup.outputs.version }}
           path: artifact/${{ matrix.name }}/*
@@ -277,7 +277,7 @@ jobs:
 
       - name: 上传失败诊断包
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: diag-${{ matrix.name }}-${{ github.run_id }}
           path: |
@@ -319,22 +319,33 @@ jobs:
       # 失败时也保存：半份缓存下轮还能命中一半，比从零开始强。
       - name: 保存 ccache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: openwrt/.ccache
           key: ${{ matrix.name }}-ccache-${{ env.SRC_HASH }}-${{ github.run_id }}
 
-  # 发布单独成一个 job：三个设备并行时，如果各自去创建同一个 tag 的 Release，
-  # ncipollo/release-action 的 replacesArtifacts 会互相删掉对方刚上传的文件，
-  # 最终只留下最后完成的那一个设备。汇总到单个 job 后串行上传才稳定。
+  # 发布单独成一个 job：三个设备并行时，如果各自去写同一个 tag 的 Release，
+  # 会互相覆盖对方刚上传的文件，最终只留下最后完成的那一个设备。汇总到单个 job
+  # 串行上传才稳定。
+  #
+  # 用 gh CLI 而不是第三方 release-action：后者在「更新已存在的 Release」时返回
+  # 403 Resource not accessible，但同一个 PATCH 用 GITHUB_TOKEN 直接调用是 200
+  # （已用一次性诊断流程逐参数验证：name / tag_name / make_latest / target_commitish
+  # 全部 rc=0），说明问题在它自己那层而不是权限。换成 gh 后行为透明、报错直接。
   publish:
     name: 汇总发布
     needs: [setup, build]
     if: inputs.publish
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
+      # 必须早于下载产物：checkout 默认 clean，会把未跟踪的 dist/ 一并删掉
+      - name: 检出本仓库
+        uses: actions/checkout@v7
+
       - name: 下载全部设备产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -342,13 +353,20 @@ jobs:
       - name: 列出待发布文件
         run: ls -lh dist
 
+      # 标签不跟着产物移动。GITHUB_TOKEN 不允许把 ref 指向「改动过
+      # .github/workflows/ 的 commit」：git push 报 refusing to allow a GitHub App
+      # to create or update workflow，改用 REST API 更新 ref 同样 403，而
+      # `workflows` 权限不在 workflow 可声明的 permissions 列表里。
+      # 本仓库几乎每个 commit 都动过 workflow，所以这条路是死的。
+      # 代价：同一版本号重复构建时标签停在首次发布的位置，产物来源改由 Release
+      # 说明里的 commit 记录。要移动标签只能上 PAT，不值得为一个标签引入长期 secret。
       - name: 发布到 Release
-        uses: ncipollo/release-action@v1
-        with:
-          name: OpenWrt ${{ needs.setup.outputs.version }}
-          tag: v${{ needs.setup.outputs.version }}
-          commit: ${{ github.sha }}
-          allowUpdates: true
-          replacesArtifacts: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-          artifacts: dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 不用 GITHUB_SHA：保留变量在 env: 里覆盖不生效
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          bash scripts/publish-release.sh \
+            "v${{ needs.setup.outputs.version }}" \
+            "${{ needs.setup.outputs.version }}" \
+            dist

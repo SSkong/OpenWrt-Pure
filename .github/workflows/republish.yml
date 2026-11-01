@@ -1,0 +1,60 @@
+name: republish
+
+# 把某次已完成构建的产物重新发布到 Release，不重新编译。
+#
+# 用途：构建成功但发布失败时，不必再烧四小时重跑整个矩阵 —— 产物在 artifact
+# 里还留着（7 天），取回来重新发布即可。这条流程本身就是发布链路的验证手段。
+#
+# 输入：
+#   run_id   产物来源的 run id（在 Actions 页面能看到）
+#   sha      那批产物对应的 commit，会写进 Release 说明
+#   tag / version  目标标签与版本号
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "产物来源的 run id"
+        required: true
+      sha:
+        description: "产物对应的 commit（写入 Release 说明）"
+        required: true
+      tag:
+        description: "目标标签"
+        required: true
+        default: "v25.12.6"
+      version:
+        description: "版本号"
+        required: true
+        default: "25.12.6"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  republish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出本仓库
+        uses: actions/checkout@v7
+
+      # 跨 run 取 artifact：同一仓库内只要给 run-id 与 token 即可，
+      # 权限靠上面的 actions: read
+      - name: 取回那轮构建的产物
+        uses: actions/download-artifact@v8
+        with:
+          pattern: openwrt-*
+          path: dist
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: 列出待发布文件
+        run: ls -lh dist
+
+      - name: 发布到 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ inputs.sha }}
+        run: bash scripts/publish-release.sh "${{ inputs.tag }}" "${{ inputs.version }}" dist
