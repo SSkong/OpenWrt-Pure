@@ -15,6 +15,10 @@ name: Build OpenWrt
 #   scripts/check-packages.sh openwrt x86               包是否真的进了 .config
 #   scripts/build.sh openwrt                            编译 + 失败定位
 #   scripts/collect-artifacts.sh openwrt x86 x86/64 out 收集产物
+#
+# 两层缓存（都只用 Actions cache，总量 10GB）：
+#   staging_dir/host*、tool*  三份约 1.2GB，工具链与 host 工具
+#   openwrt/.ccache           三份，各限 2G，编译对象（见 config/base.config）
 
 on:
   workflow_dispatch:
@@ -37,6 +41,8 @@ on:
 
 permissions:
   contents: write
+  # 删旧 ccache 缓存条目要用（GitHub 不允许覆盖同名 cache，只能先删再写）
+  actions: write
 
 concurrency:
   group: build-${{ github.ref }}
@@ -90,10 +96,21 @@ jobs:
     name: ${{ matrix.label }}
     needs: setup
     runs-on: ubuntu-24.04
-    timeout-minutes: 350
+    # 355 而不是 350：首轮 ccache 未命中时，写缓存本身会把编译拖慢 3~8%，
+    # BPI-R4 上轮已经用掉 319 分钟，这点余量是留给它的（GitHub 硬上限 360）。
+    timeout-minutes: 355
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+
+    env:
+      # ccache 上限：三台设备各一份，仓库的 Actions 缓存总额只有 10GB，
+      # 2G/台 留足余量给工具链缓存（三份合计约 1.2GB）。
+      CCACHE_MAXSIZE: 2G
+      # 默认 compiler_check=mtime：工具链每次在 CI 里现编，gcc 的 mtime 每轮都变，
+      # 一次命中不了就等于全量失效。content 改成按编译器内容哈希，让 ccache 的
+      # 有效性不再依赖「工具链缓存这一轮是否命中」，代价是每轮多几秒哈希。
+      CCACHE_COMPILERCHECK: content
 
     steps:
       # 必须先于 checkout：这个 action 会清空工作区
@@ -202,6 +219,23 @@ jobs:
           find openwrt/staging_dir -type f -path "*/stamp/*" -not -path "*target*" -exec touch {} +
           echo "工具链缓存已激活"
 
+      # ccache：跨轮复用编译对象。不缓存 build_dir 而是选它，原因写在
+      # config/base.config 的 ccache 段里（结论：build_dir 里内核的失效条件
+      # 恰好与「需要重编」的条件重合，收益小；ccache 是文件级哈希，更耐用）。
+      # key 带 run_id 是因为 actions/cache 在 key 命中时不会重新保存 —— 固定 key
+      # 会让第一轮之后新编出的对象永远存不进去。
+      - name: 恢复 ccache
+        id: cc
+        uses: actions/cache/restore@v4
+        with:
+          path: openwrt/.ccache
+          key: ${{ matrix.name }}-ccache-${{ env.SRC_HASH }}-${{ github.run_id }}
+          # 回退是安全的：ccache 按「源文件 + 命令行 + 编译器 + 头文件」哈希命中，
+          # 换版本或换工具链时旧对象只会不命中，不会产出错误的 .o。
+          restore-keys: |
+            ${{ matrix.name }}-ccache-${{ env.SRC_HASH }}-
+            ${{ matrix.name }}-ccache-
+
       - name: 校验自定义包是否真实生效
         run: bash scripts/check-packages.sh openwrt "${{ matrix.name }}"
 
@@ -256,6 +290,39 @@ jobs:
             openwrt/bin/targets/**/*.manifest
           retention-days: 7
           if-no-files-found: warn
+
+      # 命中率只有在这里才看得见：编译期 ccache 一声不响，全靠这几行判断缓存是否真在起作用。
+      - name: ccache 统计
+        if: always()
+        run: |
+          echo "命中的缓存 key: ${{ steps.cc.outputs.cache-matched-key || '（未命中，本轮从零开始）' }}"
+          CCACHE_DIR="$PWD/openwrt/.ccache" ccache -s 2>/dev/null || echo "（无 ccache 目录，本轮未产生对象）"
+          du -sh openwrt/.ccache 2>/dev/null || true
+
+      # GitHub 的 cache 不能覆盖同名 key，而这里的 key 每轮都带 run_id，
+      # 不自清会一路累加直到把 10GB 配额吃光、连带挤掉工具链缓存。
+      # 每台设备只保留最新一份；清理失败不阻断保存。
+      # 清理与保存之间有个短窗口：save 若因网络失败，这份缓存就空了，下轮重建即可。
+      # 整段以 || true 收尾：清理只是维护动作，绝不能因为它把一次成功的构建标成失败。
+      - name: 清理旧的 ccache 条目
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | select(.key | startswith("${{ matrix.name }}-ccache-")) | .id' \
+            2>/dev/null | while read -r id; do
+              [ -n "$id" ] && gh api -X DELETE "repos/${{ github.repository }}/actions/caches/$id" >/dev/null 2>&1 || true
+            done || true
+          echo "已清理 ${{ matrix.name }} 的旧 ccache 条目"
+
+      # 失败时也保存：半份缓存下轮还能命中一半，比从零开始强。
+      - name: 保存 ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: openwrt/.ccache
+          key: ${{ matrix.name }}-ccache-${{ env.SRC_HASH }}-${{ github.run_id }}
 
   # 发布单独成一个 job：三个设备并行时，如果各自去创建同一个 tag 的 Release，
   # ncipollo/release-action 的 replacesArtifacts 会互相删掉对方刚上传的文件，

@@ -195,7 +195,7 @@ nft list ruleset | grep fullcone        # 规则是否生成
 
 ## 构建耗时
 
-实测（三设备并发、工具链缓存未命中，run 41213077974）：
+实测（三设备并发、工具链缓存未命中，ccache 上线前，run 41213077974）：
 
 | 设备 | 并行构建 |
 |---|---|
@@ -203,11 +203,29 @@ nft list ruleset | grep fullcone        # 规则是否生成
 | BPI-R4 | ≈ 4 h 15 min |
 | H68K | ≈ 4 h 15 min |
 
-单 job 硬上限 360 分钟，`timeout-minutes: 350` 是留出的余量。三设备同时跑会互相抢 CPU，想快就一次只选一个设备。
+单 job 硬上限 360 分钟，`timeout-minutes: 355` 是留出的余量（首轮 ccache 未命中时，写缓存本身会把编译拖慢几个百分点）。三设备同时跑会互相抢 CPU，想快就一次只选一个设备。
 
 ### CI 缓存了什么
 
-只缓存**工具链**：`openwrt/staging_dir/host*` 与 `openwrt/staging_dir/tool*`，key = `<设备>-<源码 commit>`，`restore-keys` 回退同设备的旧缓存。恢复后必须刷新 stamp 时间戳，否则 make 认为 host/工具链未安装而重编。
+两层，都是 Actions cache：
+
+| 缓存 | 路径 | 压缩后大小 | key |
+|---|---|---|---|
+| 工具链 | `openwrt/staging_dir/host*`、`tool*` | ≈ 400 MB/台 | `<设备>-<源码 commit>` |
+| 编译对象 | `openwrt/.ccache` | ≈ 1~2 GB/台（上限 2 G） | `<设备>-ccache-<源码 commit>-<run_id>` |
+
+工具链缓存恢复后必须刷新 stamp 时间戳，否则 make 认为 host/工具链未安装而重编。
+
+**为什么缓存 `.ccache` 而不是 `build_dir` 里的内核产物。** `build_dir/target-*/linux-<board>/` 看起来更直接（内核编译占单轮 50~70 分钟），但它的失效条件和「需要重编」的条件几乎重合：`.prepared` 的 stamp 名字里带内核补丁目录的 md5，`target/linux` 一动就 `rm -rf` 整块重建；换 OpenWrt 版本又会让源码 commit 变、key 全 miss。而 ccache 是**文件级**哈希（源文件 + 命令行 + 编译器 + 头文件），`.config` 只改包选择时内核对象照样命中 —— 它比目录快照耐用得多。
+
+两个必要的环境变量（写在 `build` job 的 `env`）：
+
+- `CCACHE_MAXSIZE=2G`：三台设备各一份，总配额只有 10GB，必须给工具链留位置。
+- `CCACHE_COMPILERCHECK=content`：默认的 `mtime` 在 CI 里不可靠 —— 工具链每次现编，gcc 的 mtime 每轮都变，一次对不上就等于全部失效。改成按内容哈希，才和「工具链缓存这轮是否命中」解耦。
+
+`CONFIG_CCACHE` 依赖 `CONFIG_DEVEL=y`（它在开发者菜单下，没有 DEVEL 时会被 defconfig 静默丢弃），`scripts/doctor.sh` 会检查这一条，以及 runner 上有没有装 ccache 本体。
+
+缓存条目每轮重建：key 带 `run_id`（固定 key 命中时 `actions/cache` 不会重新保存，新对象就永远存不进去），保存前先删掉同设备的旧条目，否则会一路累加到吃光配额。首次构建没有收益，从第二轮起才体现 —— 单次净收益取决于上一轮之后改了多少东西。
 
 源码包和语言级编译缓存**都不缓存**：
 
@@ -215,7 +233,7 @@ nft list ruleset | grep fullcone        # 规则是否生成
 - **Go 不缓存**：GOCACHE 回到默认的 `$(TMP_DIR)/go-build`（`openwrt/tmp`），每轮重编。曾经把它指到外部目录并缓存过，可行，但那份配额换来的收益不值，已回退。
 - **Rust 不能按 target 目录缓存**：把 `CARGO_TARGET_DIR` 指到外部后，产物不再落在包目录的 `target/`，而 smartdns-ui 这类包的 Makefile 写死了这个相对路径（`cp target/$(CARGO_BUILD_TARGET)/release/libsmartdns_ui.so ...`），cargo 照样 "Finished"、紧接着 `cp` 找不到文件，编译 4 小时后失败（run 41108533638）。真要缓存应走 `CONFIG_RUST_SCCACHE`（`RUSTC_WRAPPER=sccache`，不动 target 目录、对包 Makefile 透明），但要先在 runner 上装 sccache。
 
-**配额提醒**：仓库总配额 10GB，三设备全开是 3 份工具链。若发现缓存被 LRU 反复淘汰（日志里没改源码却一直 cache miss），说明撑不住了，只能减少构建频率或缩小缓存范围。
+**配额提醒**：仓库总配额 10GB，现在是 3 份工具链（≈1.2GB）+ 3 份 ccache（最多 6GB）。若发现缓存被 LRU 反复淘汰（日志里没改源码却一直 cache miss），先降 `CCACHE_MAXSIZE`，再考虑减少构建频率。
 
 ## 如何确认一次构建是真的可用
 
