@@ -193,6 +193,37 @@ patch_vendor() {
 		warn "smartdns: 未找到 $SMARTDNS_MK，跳过 hash 修正"
 	fi
 
+	# ---------- smartdns-ui：给 CC 赋值补引号 ----------
+	# 上游 Build/Compile/smartdns-ui 的配方是一串「环境变量赋值 + 命令」的形式：
+	#   CC=$(TARGET_CC) PATH=... AWS_LC_SYS_CFLAGS="-O0" make -C .../plugin/smartdns-ui
+	# 这种写法依赖 shell 识别赋值前缀。开了 CONFIG_CCACHE 后 TARGET_CC = "ccache <gcc>"，
+	# 未加引号时 shell 看到的是 `CC=ccache <gcc> PATH=...`：
+	#   - CC 只拿到 "ccache"
+	#   - <gcc> 成了要执行的命令，后面每个词都成了它的参数
+	# 于是 gcc 把 PATH=... / AWS_LC_SYS_CFLAGS=-O0 / make / -C / plugin/smartdns-ui
+	# 全当成输入文件交给 ld：
+	#   ld: cannot find PATH=...: No such file or directory
+	#   ld: cannot find make: No such file or directory
+	#   ld: error: .../plugin/smartdns-ui: read: Is a directory
+	# 加引号后整串作为一个值交给子 make。子目录 Makefile 里用 $(shell $(CC) -print-sysroot)
+	# 之类取信息是安全的 —— ccache 对非编译调用会原样透传给真编译器。
+	# 只有一处在配方行上，所以按整文件替换即可；若上游新增了别的写法，断言会失败提醒人工看。
+	if [ -f "$SMARTDNS_MK" ]; then
+		if has_text 'CC="$(TARGET_CC)"' "$SMARTDNS_MK"; then
+			sub "smartdns-ui: CC 已加引号"
+		elif has_text 'CC=$(TARGET_CC)' "$SMARTDNS_MK"; then
+			sed -i 's|CC=\$(TARGET_CC)|CC="$(TARGET_CC)"|' "$SMARTDNS_MK" ||
+				die "smartdns-ui: CC 引号修正失败: $SMARTDNS_MK"
+			has_text 'CC="$(TARGET_CC)"' "$SMARTDNS_MK" ||
+				die "smartdns-ui: CC 引号修正未生效: $SMARTDNS_MK"
+			sub "smartdns-ui: CC 已加引号（ccache 不再被 shell 切词）"
+		else
+			warn "smartdns-ui: $SMARTDNS_MK 里找不到 'CC=$(TARGET_CC)'，上游结构可能已变"
+		fi
+	else
+		warn "smartdns-ui: 未找到 $SMARTDNS_MK，跳过 CC 引号修正"
+	fi
+
 	# ---------- vlmcsd：让本包绕开 ccache ----------
 	# 它的 BASECFLAGS 里有 -DVLMCSD_COMPILER=\"$(notdir $(CC))\"。转义引号在 shell 里不构成
 	# 引用，所以 CC 一旦带空格（CONFIG_CCACHE 会把它写成 "ccache <gcc>"），编译器名就被切成
