@@ -79,20 +79,17 @@ clone_all() {
 	clone_pkg oxidns              hahaher123/luci-app-oxidns         main     # luci-app-oxidns
 	clone_pkg kixdns              JohnsonRan/luci-app-kixdns         main     # kixdns(Rust) + kixdns-stats + luci-app-kixdns
 
-	# ---------- 任务 / 定时 / 磁盘 / 看门狗 / 分区（sirpdboy & Arthur97172）----------
+	# ---------- 任务 / 定时 / 磁盘 / 分区（sirpdboy & Arthur97172）----------
 	clone_pkg taskplan            sirpdboy/luci-app-taskplan         main     # luci-app-taskplan
-	clone_pkg timecontrol         sirpdboy/luci-app-timecontrol      main     # luci-app-timecontrol（nft 定时控制）
 	clone_pkg tasks               Arthur97172/luci-app-tasks         main     # luci-app-tasks（定时/开机/上网控制）
 	clone_pkg netspeedtest        sirpdboy/netspeedtest              main     # luci-app-netspeedtest + ookla-speedtest + homebox
-	clone_pkg watchdog            sirpdboy/luci-app-watchdog         main     # luci-app-watchdog + watchdog
 	clone_pkg partexp             sirpdboy/luci-app-partexp          main     # luci-app-partexp（分区扩容）
 	clone_pkg online-upgrade      Arthur97172/luci-app-online-upgrade main
 	clone_pkg substore            Arthur97172/luci-app-substore      main     # 依赖 luci-lua-runtime + luci-compat
 
-	# ---------- 容器 / 磁盘 / 端口转发 / KMS ----------
+	# ---------- 容器 / 磁盘 / KMS ----------
 	clone_pkg luci-app-dockox     permails/luci-app-dockox           main     # 根无PKG_NAME，回退=目录名，外层须叫 luci-app-dockox；拉 docker 全家
 	clone_pkg diskbox             permails/luci-app-diskbox          master   # luci-app-diskbox（磁盘/分区/RAID）
-	clone_pkg socat-reforged      busybin/luci-app-socat-reforged    main     # luci-app-socat-reforged（socat 端口转发）
 	clone_pkg luci-app-vlmcsd     permails/luci-app-vlmcsd           main     # 外层须叫 luci-app-vlmcsd，否则与内嵌 vlmcsd/ 子包同名
 
 	# ---------- 测速 / 网络访问控制 ----------
