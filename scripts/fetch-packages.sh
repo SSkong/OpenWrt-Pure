@@ -77,7 +77,6 @@ clone_all() {
 	clone_pkg wechatpush          tty228/luci-app-wechatpush         master
 	clone_pkg airconnect          sbwml/luci-app-airconnect          main     # luci-app-airconnect + airconnect
 	clone_pkg oxidns              hahaher123/luci-app-oxidns         main     # luci-app-oxidns
-	clone_pkg kixdns              JohnsonRan/luci-app-kixdns         main     # kixdns(Rust) + kixdns-stats + luci-app-kixdns
 
 	# ---------- 任务 / 定时 / 磁盘 / 分区（sirpdboy & Arthur97172）----------
 	clone_pkg taskplan            sirpdboy/luci-app-taskplan         main     # luci-app-taskplan
@@ -123,15 +122,12 @@ clone_all() {
 	# ---------- 硬件信息（MinimaxFlora autocore 25.12 适配，补回官方源没有的 arm/x86）----------
 	clone_pkg autocore            MinimaxFlora/autocore              openwrt-25.12  # 变体 autocore-arm / autocore-x86，设备配置里分别选
 
-	# ---------- 主题 ----------
-	# 装多个主题只是多占磁盘，互不冲突；实际生效的是 luci.main.mediaurlbase，
-	# 由用户在「系统 → 界面」里选，脚本不做覆盖（改了会把用户的选择冲掉）。
-	# 目录名规则：仓库根 Makefile 里有 PKG_NAME 的，目录名可以随意；
-	# 没有 PKG_NAME 的（luci.mk 用 $(notdir $(CURDIR)) 回退），目录名必须等于包名。
-	clone_pkg theme-footstrap     VizzleTF/luci-theme-footstrap      main     # 子包 luci-theme-footstrap
-	clone_pkg luci-theme-aurora   eamonxg/luci-theme-aurora          master   # 根无PKG_NAME，回退=目录名，外层须叫 luci-theme-aurora
-	clone_pkg luci-app-aurora-config eamonxg/luci-app-aurora-config  master   # 外层须叫 luci-app-aurora-config
-	clone_pkg luci-theme-shadcn   eamonxg/luci-theme-shadcn          main     # 同上：根无PKG_NAME，外层须叫 luci-theme-shadcn
+	# ---------- 主题（monorepo：一个仓库两个子包）----------
+	# 仓库根目录没有 Makefile：主题在 luci-theme-vantage/、仪表盘在 luci-app-vantage/。
+	# buildroot 的 package 扫描深度是 5（include/toplevel.mk 里 SCAN_DEPTH=5），
+	# package/custom/vantage/<子包>/Makefile 位于第 3 层，能被正常扫到。
+	# 两个子包都显式写了 PKG_NAME，所以克隆目录名不影响包名。
+	clone_pkg vantage             anothaDev/luci-theme-vantage      main     # luci-theme-vantage + luci-app-vantage
 
 	# ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 	# 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
