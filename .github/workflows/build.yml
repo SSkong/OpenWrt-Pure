@@ -104,9 +104,16 @@ jobs:
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     env:
-      # ccache 上限：三台设备各一份，仓库的 Actions 缓存总额只有 10GB，
-      # 2G/台 留足余量给工具链缓存（三份合计约 1.2GB）。
-      CCACHE_MAXSIZE: 2G
+      # 上限怎么定的：ccache 的访问模式是「每轮从工具链编到包，顺序基本相同」，
+      # 典型的循环引用。LRU 在这种模式下如果装不下整个工作集就会接近 0 命中
+      # （2G 时实测 12%，Cleanups 6606 次，等于白写 1.9G）。
+      # 一轮 x86 全量约 15 万个可缓存调用，工作集估计 6~7G，三台都装满放不下
+      # （Actions 缓存总额 10GB）。折中到 5G/台：按实测压缩比 0.43，上传约
+      # 2.2G/台 × 3 + 工具链 1.2G ≈ 7.7G，留出余量。
+      CCACHE_MAXSIZE: 5G
+      # 默认 limit_multiple=0.8：超限时只裁到 80%，等于永远只用得到 4G。
+      # 0.95 换回 15% 有效容量，又留了 5% 缓冲避免反复触发清理。
+      CCACHE_LIMIT_MULTIPLE: "0.95"
       # 默认 compiler_check=mtime：工具链每次在 CI 里现编，gcc 的 mtime 每轮都变，
       # 一次命中不了就等于全量失效。content 改成按编译器内容哈希，让 ccache 的
       # 有效性不再依赖「工具链缓存这一轮是否命中」，代价是每轮多几秒哈希。
@@ -236,6 +243,21 @@ jobs:
             ${{ matrix.name }}-ccache-${{ env.SRC_HASH }}-
             ${{ matrix.name }}-ccache-
 
+      - name: 打印 ccache 生效配置并重置计数
+        if: always()
+        run: |
+          export CCACHE_DIR="$PWD/openwrt/.ccache"
+          # 环境变量与 ccache.conf 的优先级是「环境变量高」，而 rules.mk 又写了
+          # CCACHE_NOCOMPRESS / CCACHE_BASEDIR / CCACHE_DIR 三个。这里把最终生效值
+          # 打出来，省得靠猜——2G 那一轮就是没看配置才误以为缓存在起作用。
+          ccache -p 2>/dev/null | grep -E '\((default|environment)\)' | grep -E \
+            'max_size|limit_multiple|compression|compiler_check|base_dir|cache_dir' || true
+          echo "跨轮继承的统计（含历史轮次）："
+          ccache -s 2>/dev/null | sed -n '1,6p' || echo "（无 ccache 目录）"
+          # 清零：不清的话 ccache -s 是「缓存目录建立以来的累计值」，
+          # 12% 这个数字混着好几轮，看不出本轮到底命中多少。
+          ccache -z 2>/dev/null || true
+
       - name: 校验自定义包是否真实生效
         run: bash scripts/check-packages.sh openwrt "${{ matrix.name }}"
 
@@ -292,12 +314,29 @@ jobs:
           if-no-files-found: warn
 
       # 命中率只有在这里才看得见：编译期 ccache 一声不响，全靠这几行判断缓存是否真在起作用。
+      # 计数已在「打印 ccache 生效配置并重置计数」里清零，所以下面就是本轮的结果。
       - name: ccache 统计
         if: always()
         run: |
+          export CCACHE_DIR="$PWD/openwrt/.ccache"
           echo "命中的缓存 key: ${{ steps.cc.outputs.cache-matched-key || '（未命中，本轮从零开始）' }}"
-          CCACHE_DIR="$PWD/openwrt/.ccache" ccache -s 2>/dev/null || echo "（无 ccache 目录，本轮未产生对象）"
+          ccache -s 2>/dev/null || echo "（无 ccache 目录，本轮未产生对象）"
           du -sh openwrt/.ccache 2>/dev/null || true
+          # ccache 4.9 的 -s 不报条目数，自己数：结果文件的文件名是 *R（未压缩时
+          # 体积≈.o 本体），据此可以估出「平均对象多大、工作集还差多少」。
+          entries=$(find openwrt/.ccache -type f -name '*R' 2>/dev/null | wc -l)
+          echo "对象条目数: $entries"
+          # 顶到上限就说明工作集比缓存大，LRU 会从头淘汰，命中率不会随轮次上升。
+          # 这个判断比命中率更早给出结论：还在 100% 就说明继续加大上限才有意义。
+          size_mb=$(du -sm openwrt/.ccache 2>/dev/null | cut -f1)
+          case "${CCACHE_MAXSIZE:-}" in
+            *G) cap_mb=$(( ${CCACHE_MAXSIZE%G} * 1024 )) ;;
+            *M) cap_mb=${CCACHE_MAXSIZE%M} ;;
+            *)  cap_mb=0 ;;
+          esac
+          if [ "${size_mb:-0}" -ge $(( cap_mb * 95 / 100 )) ]; then
+            echo "::warning::ccache 已顶到上限（${size_mb}MB / ${CCACHE_MAXSIZE}），工作集大于缓存，命中率不会继续上升"
+          fi
 
       # GitHub 的 cache 不能覆盖同名 key，而这里的 key 每轮都带 run_id，
       # 不自清会一路累加直到把 10GB 配额吃光、连带挤掉工具链缓存。
