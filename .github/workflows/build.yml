@@ -217,6 +217,30 @@ jobs:
           restore-keys: |
             ${{ matrix.name }}-
 
+      - name: 恢复 host 工具 stamp
+        id: hstamp
+        uses: actions/cache/restore@v6
+        with:
+          # host 工具的 stamp 不在 staging_dir 里。include/host-build.mk 把
+          #   HOST_STAMP_PREPARED   = $(HOST_BUILD_DIR)/.prepared<md5>
+          #   HOST_STAMP_CONFIGURED = $(HOST_BUILD_DIR)/.configured
+          #   HOST_STAMP_BUILT      = $(HOST_BUILD_DIR)/.built
+          # 三个都放在 build_dir/host/<包>/，只有 .installed 落在
+          # staging_dir/host/stamp/。所以只缓存 staging_dir 时，make 看到的是
+          # 「装好了、但没编过」，tools/ 会整段重编 —— 实测 21 分钟，cmake 一个
+          # 就占 6.8 分钟。工具链 gcc/binutils 不受影响（日志里没有 toolchain
+          # 编译段，它走的是 staging 里的 stamp）。
+          # 这里只补 stamp 文件本身，不缓存整个 build_dir：体积可忽略，而且
+          # .prepared 文件名里带着源码依赖的 md5，改了工具源码时名字对不上，
+          # 会自动重编，不会拿旧 stamp 蒙混。
+          path: |
+            openwrt/build_dir/host/*/.prepared*
+            openwrt/build_dir/host/*/.configured*
+            openwrt/build_dir/host/*/.built*
+          key: ${{ matrix.name }}-hstamp-${{ env.SRC_HASH }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ matrix.name }}-hstamp-${{ env.SRC_HASH }}-
+
       - name: 激活缓存的工具链
         # 缓存恢复后必须刷新 stamp 时间戳，否则 make 认为 host/工具链未安装而重编
         if: steps.cache.outputs.cache-hit == 'true'
@@ -326,6 +350,11 @@ jobs:
           # 体积≈.o 本体），据此可以估出「平均对象多大、工作集还差多少」。
           entries=$(find openwrt/.ccache -type f -name '*R' 2>/dev/null | wc -l)
           echo "对象条目数: $entries"
+          # host 工具 stamp 有没有被恢复：这两个数如果是 0，说明 hstamp 缓存没生效，
+          # 下一轮 tools/ 还会整段重编（约 21 分钟）。
+          echo "host stamp: prepared=$(find openwrt/build_dir/host -maxdepth 2 -name '.prepared*' 2>/dev/null | wc -l)" \
+               "built=$(find openwrt/build_dir/host -maxdepth 2 -name '.built' 2>/dev/null | wc -l)" \
+               "| build_dir/host $(du -sh openwrt/build_dir/host 2>/dev/null | cut -f1)"
           # 顶到上限就说明工作集比缓存大，LRU 会从头淘汰，命中率不会随轮次上升。
           # 这个判断比命中率更早给出结论：还在 100% 就说明继续加大上限才有意义。
           size_mb=$(du -sm openwrt/.ccache 2>/dev/null | cut -f1)
@@ -343,17 +372,18 @@ jobs:
       # 每台设备只保留最新一份；清理失败不阻断保存。
       # 清理与保存之间有个短窗口：save 若因网络失败，这份缓存就空了，下轮重建即可。
       # 整段以 || true 收尾：清理只是维护动作，绝不能因为它把一次成功的构建标成失败。
-      - name: 清理旧的 ccache 条目
+      - name: 清理旧的缓存条目
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # 前缀同时匹配 ccache 与 hstamp：两者 key 都带 run_id，不自清会一路累加。
           gh api --paginate "repos/${{ github.repository }}/actions/caches?per_page=100" \
-            --jq '.actions_caches[] | select(.key | startswith("${{ matrix.name }}-ccache-")) | .id' \
+            --jq '.actions_caches[] | select(.key | startswith("${{ matrix.name }}-ccache-") or startswith("${{ matrix.name }}-hstamp-")) | .id' \
             2>/dev/null | while read -r id; do
               [ -n "$id" ] && gh api -X DELETE "repos/${{ github.repository }}/actions/caches/$id" >/dev/null 2>&1 || true
             done || true
-          echo "已清理 ${{ matrix.name }} 的旧 ccache 条目"
+          echo "已清理 ${{ matrix.name }} 的旧 ccache / hstamp 条目"
 
       # 失败时也保存：半份缓存下轮还能命中一半，比从零开始强。
       - name: 保存 ccache
@@ -362,6 +392,19 @@ jobs:
         with:
           path: openwrt/.ccache
           key: ${{ matrix.name }}-ccache-${{ env.SRC_HASH }}-${{ github.run_id }}
+
+      - name: 保存 host 工具 stamp
+        # 编译前就失败时 build_dir/host 可能不存在，cache/save 会直接报错；
+        # 这只是加速用的旁枝，不能让它把一次成功的构建标成失败。
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            openwrt/build_dir/host/*/.prepared*
+            openwrt/build_dir/host/*/.configured*
+            openwrt/build_dir/host/*/.built*
+          key: ${{ matrix.name }}-hstamp-${{ env.SRC_HASH }}-${{ github.run_id }}
 
   # 发布单独成一个 job：三个设备并行时，如果各自去写同一个 tag 的 Release，
   # 会互相覆盖对方刚上传的文件，最终只留下最后完成的那一个设备。汇总到单个 job
