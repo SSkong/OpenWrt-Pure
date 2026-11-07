@@ -168,11 +168,14 @@ nft list ruleset | grep fullcone        # 规则是否生成
 | 其他 | `luci-app-vlmcsd`（KMS） | `permails/luci-app-vlmcsd` |
 | 主题 / 仪表盘 | `luci-theme-vantage`、`luci-app-vantage` | `anothaDev/luci-theme-vantage`（monorepo，两个子包） |
 | 硬件信息 | `autocore-arm` / `autocore-x86` | `MinimaxFlora/autocore`(openwrt-25.12) |
+| 代理面板 | `luci-app-fchomo` + 自带内核 `mihomo` | `fcshark-org/openwrt-fchomo`（monorepo，两个子包；前端依赖 js-md5 子模块） |
 | 科学插件备份 | helloworld 整仓 44 包（未被 config 选中的不编译） | `sbwml/openwrt_helloworld`(v5) |
 
 官方 feeds 里需要显式选中的依赖：`node`（换 sbwml 预编译版）、`zerotier`、`dnsmasq-full`、`xz-utils`。
 
 按 helloworld README 的配套操作：feeds 自带的 `xray-core/v2ray-core/v2ray-geodata/sing-box` 等同名核心自动移除（由 helloworld 版本接管）；`lang/golang` 换 sbwml `27.x`；`lang/node` 换 sbwml 预编译版。最后一步统一删除 feeds 中与 `package/custom` 同名的副本，避免 buildroot 重复定义。
+
+`fchomo` 自带 mihomo 内核（`mihomo` 子包，版本钉死在 `mihomo/Makefile` 里），所以 helloworld 的 `mihomo-meta` 不再选中：两者的 `ALTERNATIVES` 都指向 `/usr/bin/mihomo`，而 `mihomo-meta` 优先级 300 会盖掉 fchomo 的 100，同时装会让面板调到另一个版本的内核上。
 
 ### 自研插件：luci-app-apbridge
 

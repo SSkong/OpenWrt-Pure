@@ -27,11 +27,16 @@ CLONE_FAIL_COUNT=0
 # 网络抖动很常见，失败重试 3 次；仍失败只记名字，由 clone_all 在阶段末汇总退出
 # （一次列出全部失败项，比遇到第一个就退更有用，且不会浪费后面的编译时间）。
 clone_pkg() {
-	local name="$1" repo="$2" branch="$3" try=1
+	local name="$1" repo="$2" branch="$3" want_sub="${4:-}" try=1
 	step "${name}  <= ${repo}@${branch}"
 	while :; do
 		rm -rf "package/custom/${name}"
-		if git clone -q --depth 1 --single-branch -b "$branch" "https://github.com/${repo}.git" "package/custom/${name}" 2>/dev/null; then
+		# 第 4 个参数非空 = 连子模块一起拉（fchomo 的前端依赖 js-md5 子模块）。
+		# ${want_sub:+…} 不加引号，靠分词展开成两个独立参数；空则整个消失。
+		# --shallow-submodules 让子模块也保持深度 1，否则大子模块会把单仓克隆
+		# 变成全历史克隆。
+		if git clone -q --depth 1 --single-branch ${want_sub:+--recurse-submodules --shallow-submodules} \
+			-b "$branch" "https://github.com/${repo}.git" "package/custom/${name}" 2>/dev/null; then
 			rm -rf "package/custom/${name}/.github" "package/custom/${name}/.git"
 			return 0
 		fi
@@ -128,6 +133,15 @@ clone_all() {
 	# package/custom/vantage/<子包>/Makefile 位于第 3 层，能被正常扫到。
 	# 两个子包都显式写了 PKG_NAME，所以克隆目录名不影响包名。
 	clone_pkg vantage             anothaDev/luci-theme-vantage      main     # luci-theme-vantage + luci-app-vantage
+
+	# ---------- 代理面板：fchomo（mihomo 内核 + LuCI 前端，monorepo）----------
+	# 仓库根目录没有 Makefile：内核在 mihomo/、前端在 luci-app-fchomo/，位于第 3 层，
+	# SCAN_DEPTH=5 能扫到；两个子包都显式写了 PKG_NAME，克隆目录名不影响包名。
+	# 第 4 个参数 sub 表示要拉子模块：前端依赖
+	# luci-app-fchomo/htdocs/luci-static/resources/fchomo/js-md5（emn178/js-md5），
+	# 它是 submodule。缺了之后 .prepare.sh 里的 `readlink -f md5.js` 取不到内容，
+	# 会静默产出一个缺 md5 的空壳前端 —— 构建不报错，界面才炸。
+	clone_pkg fchomo              fcshark-org/openwrt-fchomo        master   sub
 
 	# ---------- sbwml openwrt_helloworld（科学插件防炸上游备份，整仓引入，README 要求）----------
 	# 含 passwall/passwall2/ssr-plus/openclash/nikki/mihomo/dae/sing-box/xray/v2ray/trojan/
@@ -311,6 +325,39 @@ patch_vendor() {
 			die "languard: postinst 宏未注入成功（$LG_MK）"
 	else
 		warn "languard: 未找到 $LG_MK，跳过 postinst 注入"
+	fi
+
+	# ---------- fchomo：把 .prepare.sh 里查 GitHub API 的 latest 换成固定版本 ----------
+	# luci-app-fchomo 的 .prepare.sh 是 PKG_UNPACK 阶段执行的，会现下载 jq / gm / minify
+	# 三个宿主工具。其中 gm 与 minify 的版本是 `curl api.github.com/.../releases/latest
+	# | jq -r .tag_name` 现查的，有两个问题：
+	#   1. 未认证的 API 请求按 IP 限流（每小时 60 次）。CI runner 出口 IP 是共享的，
+	#      被打满时 latest 为空，拼出来的下载地址 404；而脚本没有 set -e，会一路"成功"
+	#      地生成空文档和坏掉的前端 —— 构建是绿的，界面是坏的，这种失败最难查。
+	#   2. 版本每天在漂，同一 commit 两次构建结果不同，与 PKG_VERSION 钉死的思路相悖。
+	# 改为钉死 tag，只保留 github.com 的直链下载（直链不走 API，没有这个限流）。
+	# 两个 tag 都是按当时的 releases/latest 取的：
+	#   kpym/gm v0.26.0        -> gm_0.26.0_Linux_intel64.tar.gz
+	#   tdewolff/minify v2.24.25 -> minify_linux_amd64.tar.gz
+	# 断言用的是替换后的整行，上游脚本一旦改写这两行就会失败提醒，不会静默失效。
+	# 正则不带行尾锚点：上游当前是 LF，但如果哪天改成 CRLF，带 $ 会匹配不上、
+	# 直接 die；去掉 $ 后两种行尾都能命中，而前缀足够长，不会误伤别的行。
+	FCHOMO_PREP="package/custom/fchomo/luci-app-fchomo/.prepare.sh"
+	if [ -f "$FCHOMO_PREP" ]; then
+		sed -i -E \
+			's|^latest="\$\(curl -L https://api\.github\.com/repos/kpym/gm[^)]*\)"|latest="v0.26.0"|;
+			 s|^latest="\$\(curl -L https://api\.github\.com/repos/tdewolff/minify[^)]*\)"|latest="v2.24.25"|' \
+			"$FCHOMO_PREP" || die "fchomo: .prepare.sh 改写失败: $FCHOMO_PREP"
+		has_line '^latest="v0\.26\.0"' "$FCHOMO_PREP" ||
+			die "fchomo: gm 版本未钉死（上游 .prepare.sh 可能已改写，需人工确认）"
+		has_line '^latest="v2\.24\.25"' "$FCHOMO_PREP" ||
+			die "fchomo: minify 版本未钉死（上游 .prepare.sh 可能已改写，需人工确认）"
+		if has_text 'api.github.com' "$FCHOMO_PREP"; then
+			warn "fchomo: .prepare.sh 里仍有 api.github.com 调用（可能是上游新增的，需人工确认是否会限流）"
+		fi
+		sub "fchomo: gm v0.26.0 / minify v2.24.25 已钉死，不再查询 GitHub API"
+	else
+		warn "fchomo: 未找到 $FCHOMO_PREP，跳过版本钉死"
 	fi
 }
 
