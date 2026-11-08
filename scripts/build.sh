@@ -6,7 +6,8 @@
 # 失败子目录内部到底报了什么完全看不到。这里做三件事：
 #   1. 编译全程每 5 分钟记一次磁盘/内存曲线（usage.log），ENOSPC / OOM 才有据可查
 #   2. 失败时从日志里取「哪个子目录失败的」，只对该子目录单线程重跑（stamp 都在，
-#      能直接走到出错点）；找不到就退回整体重跑
+#      能直接走到出错点）。报错行可能是 <目录> 也可能是 <目录> [host] 两种形态，
+#      后者要重跑 host-compile 而不是 compile。
 #   3. 重跑的完整输出写 retry.log，CI 里截尾部作为诊断包
 #
 # 重跑先 compile 后 install，两段都要看：编译错误在 compile 段，打包/安装错误在
@@ -76,7 +77,17 @@ resources
 
 # 注意末尾的 || true：找不到匹配时 grep 退出 1，在 set -e 语义下会直接把这一步
 # 结束掉，后面「有没有子目录」的分支就跑不到了。
-sub_dir="$(grep -oE 'ERROR: [^ ]+ failed to build' "$BUILD_LOG" | tail -1 | awk '{print $2}' || true)"
+#
+# 报错行有两种形态（package/Makefile 与 rules.mk 各吐一种）：
+#   ERROR: package/custom/foo failed to build.
+#   ERROR: package/feeds/packages/rust [host] failed to build.
+# 第二种方括号里是变体名，host 表示失败发生在宿主（host）构建阶段。早先的正则只认
+# 第一种，遇到 rust 就匹配不到、退回「整体单线程重跑」——那等于从头再编一遍世界，
+# 3600 秒 timeout 一到就被杀，真正的错误反而永远看不到（run 42392767233 就是这样
+# 把 rust 的原始报错丢掉的：重跑在 LLVM 1652/3898 处被掐断，只剩 Terminated）。
+err_line="$(grep -oE 'ERROR: [^ ]+( \[[A-Za-z_-]+\])? failed to build' "$BUILD_LOG" | tail -1 || true)"
+sub_dir="$(awk '{print $2}' <<<"$err_line")"
+variant="$(sed -nE 's/^.*\[([A-Za-z_-]+)\].*$/\1/p' <<<"$err_line")"
 : > "$RETRY_LOG"
 
 # 一次重跑：输出同进 retry.log（累积）与 retry-step.log（只本次），回显尾部 200 行
@@ -89,25 +100,41 @@ retry_once() {
 # 顶层目标对包目录是 <dir>/compile、<dir>/install；嵌套包目录在顶层可能没有
 # install 规则，那就进目录自己 make —— 必须显式传 TOPDIR，否则 rules.mk 里的
 # include $(TOPDIR)/package.mk 会展开成 /package.mk
+# 返回值：0 成功 / 2 顶层和目录内都没有这个目标 / 1 拿到真实报错
 retry_target() {
 	local t="$1"
 	retry_once make -j1 V=s "$sub_dir/$t" && return 0
 	if grep -q "No rule to make target" "$STEP_LOG"; then
 		echo "顶层没有 $sub_dir/$t，改为在该目录内 make" | tee -a "$RETRY_LOG"
 		retry_once make -C "$sub_dir" -r -j1 V=s TOPDIR="$PWD" "$t" && return 0
+		grep -q "No rule to make target" "$STEP_LOG" && return 2
 	fi
 	return 1
 }
 
 if [ -n "$sub_dir" ]; then
-	echo "失败子目录: $sub_dir"
-	for t in compile install; do
+	echo "失败子目录: $sub_dir${variant:+（变体: $variant）}"
+	# host 变体失败要去重跑 host-compile，重跑 compile 只会把目标架构那份再编一遍，
+	# 根本走不到出错的分支。
+	if [ "$variant" = host ]; then
+		targets=(host-compile host-install)
+	else
+		targets=(compile install)
+	fi
+	for t in "${targets[@]}"; do
 		step "重跑 $sub_dir/$t"
-		retry_target "$t" || break
+		rc=0
+		retry_target "$t" || rc=$?
+		[ "$rc" -eq 2 ] && continue	# 没这个目标，换下一个
+		[ "$rc" -eq 0 ] || break	# 拿到真实报错
 	done
 else
-	echo "日志里没找到 'ERROR: <子目录> failed to build'，退回整体单线程重跑"
-	retry_once make -j1 V=s
+	warn "日志里没有 'ERROR: <子目录> failed to build'，无法定位失败点"
+	cat <<'EOM'
+不做整体单线程重跑：OpenWrt 全量单线程要数小时，必然先撞上 3600 秒 timeout，
+60 分钟后被杀且拿不到任何新信息（这正是 rust [host] 那次丢掉原始报错的原因）。
+请直接看失败诊断包里的 build.log。
+EOM
 fi
 
 echo "----- 重跑后的资源状况 -----"
