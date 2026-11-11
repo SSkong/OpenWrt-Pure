@@ -14,9 +14,10 @@
 #   - 不新增内核模块、不新增 Kconfig，直接编进 nf_nat / xt_MASQUERADE / nft_masq
 #     .ko，所以固件里不需要额外装任何 kmod 包
 #
-# 本脚本只做两件事：把 9 个补丁放到构建系统会读取的位置，给 libnftnl 打开
-# PKG_FIXUP:=autoreconf。补丁的真正应用由 OpenWrt 在编译期完成（失败会硬报错，
-# 不会静默跳过）。
+# 补丁集来自 mufeng05/openwrt-sonic-fullcone（kernel/ + firewall/ + patches/
+# + translations/），本脚本把它映射到 OpenWrt 构建系统会读取的位置，并给
+# libnftnl 打开 PKG_FIXUP:=autoreconf。真正打补丁由 OpenWrt 在编译期完成
+# （失败会硬报错，不会静默跳过）。上游更新时按同样的目录对应关系同步即可。
 #
 # 顺序要求：必须在 `./scripts/feeds install -a` 之后调用（LuCI 补丁要落到
 # feeds/luci/applications/luci-app-firewall/ 下），且必须在 `make download`
@@ -37,8 +38,10 @@ HACK="target/linux/generic/hack-6.12"
 [ -d "$HACK" ] || die "找不到 $HACK；本套补丁只针对内核 6.12 验证（25.12 分支），升级内核需重新 rebase 后改这里"
 
 for p in 984-add-sonic-fullcone-support.patch 985-add-sonic-fullcone-to-ipt.patch \
-         986-add-sonic-fullcone-to-nft.patch 901-iptables-sonic-fullcone.patch \
+         986-add-sonic-fullcone-to-nft.patch 987-sonic-fullcone-fix-races-and-drops.patch \
+         901-iptables-sonic-fullcone.patch \
          001-libnftnl-fullcone-expression.patch 002-nftables-fullcone-expression.patch \
+         003-nftables-fullcone-json-parser.patch \
          001-firewall4-sonic-fullcone.patch 001-firewall3-sonic-fullcone.patch \
          001-luci-app-firewall-fullcone-options.patch zh_Hans.po; do
 	require_file "${PATCH_DIR}/$p" "缺少补丁 ${PATCH_DIR}/$p"
@@ -49,12 +52,18 @@ step "内核层：nf_nat 3-tuple 哈希表 + xt_MASQUERADE/nft_masq 的 fullcone
 put "${PATCH_DIR}/984-add-sonic-fullcone-support.patch" "$HACK" 984-add-sonic-fullcone-support.patch
 put "${PATCH_DIR}/985-add-sonic-fullcone-to-ipt.patch"  "$HACK" 985-add-sonic-fullcone-to-ipt.patch
 put "${PATCH_DIR}/986-add-sonic-fullcone-to-nft.patch"  "$HACK" 986-add-sonic-fullcone-to-nft.patch
+# 987 是在 984 之上的修正，不属于 SONiC 原补丁：并发竞争（manip_src 哈希桶的锁）
+# 与外部主动连入时被误丢的包。编号排最后，保证 apply 顺序在 984 之后。
+put "${PATCH_DIR}/987-sonic-fullcone-fix-races-and-drops.patch" "$HACK" 987-sonic-fullcone-fix-races-and-drops.patch
 
 step "用户态：iptables FULLCONE target / libnftnl 与 nftables 的 fullcone 表达式"
 # iptables 1.8.9 起才有 extensions/libxt_NAT.c，25.12 是 1.8.10，符合。
 put "${PATCH_DIR}/901-iptables-sonic-fullcone.patch"      package/network/utils/iptables/patches 901-sonic-fullcone.patch
 put "${PATCH_DIR}/001-libnftnl-fullcone-expression.patch" package/libs/libnftnl/patches          001-fullcone-expression.patch
 put "${PATCH_DIR}/002-nftables-fullcone-expression.patch" package/network/utils/nftables/patches 002-fullcone-expression.patch
+# 003 修的是 002 引入的两个崩溃面：nft -j（JSON 输入）走不到 fullcone 表达式，
+# 以及 nft -o 优化器在 fullcone 规则上解引用空指针。编号必须排在 002 之后。
+put "${PATCH_DIR}/003-nftables-fullcone-json-parser.patch" package/network/utils/nftables/patches 003-fullcone-json-parser.patch
 
 # libnftnl 补丁往 src/Makefile.am 里加了 src/expr/fullcone.c，使 .am 比 tar 包自带的
 # .in 更新，make 会用打包时的 automake 版本（1.3.1 是 automake-1.17）重新生成
@@ -87,14 +96,26 @@ LUCI_FW="feeds/luci/applications/luci-app-firewall"
 put "${PATCH_DIR}/001-luci-app-firewall-fullcone-options.patch" "$LUCI_FW/patches" 001-add-fullcone-options.patch
 
 # po/ 不进 build_dir，用 patches/ 打不到翻译文件，只能直接追加。
+# 追加块用 # BEGIN/END openwrt-sonic-fullcone 包住：重复执行时先删旧块再加。
+# 否则上游改文案（「所有协议」→「以上全部」）之后，旧条目会残留，同一个 msgid
+# 出现两条，msgfmt 取哪条是随机的。上游脚本也是这个做法，保持一致。
 ZH_PO="$LUCI_FW/po/zh_Hans/firewall.po"
 if [ -f "$ZH_PO" ]; then
-	if has_text 'Fullcone NAT' "$ZH_PO"; then
-		sub "zh_Hans 翻译已存在"
-	else
-		cat "${PATCH_DIR}/zh_Hans.po" >> "$ZH_PO" || die "无法追加翻译到 $ZH_PO"
-		sub "zh_Hans 翻译已追加"
+	if has_text 'BEGIN openwrt-sonic-fullcone' "$ZH_PO"; then
+		sed '/^# BEGIN openwrt-sonic-fullcone$/,/^# END openwrt-sonic-fullcone$/d' "$ZH_PO" > "$ZH_PO.tmp" &&
+			mv "$ZH_PO.tmp" "$ZH_PO" || { rm -f "$ZH_PO.tmp"; die "清理旧翻译块失败: $ZH_PO"; }
 	fi
+	# 更早的版本没有标记块，只有裸条目，按整段删掉再追加。
+	# 起止两个条件都要在：sed 的区间删除若匹配不到结束行，会一路删到文件末尾，
+	# 把后面所有正常条目清空。上游脚本同样是两个条件同时判断。
+	if has_text 'msgid "Fullcone NAT"' "$ZH_PO" && has_text 'msgstr "所有协议"' "$ZH_PO"; then
+		sed '/^msgid "Fullcone NAT"$/,/^msgstr "所有协议"$/d' "$ZH_PO" > "$ZH_PO.tmp" &&
+			mv "$ZH_PO.tmp" "$ZH_PO" || { rm -f "$ZH_PO.tmp"; die "清理旧翻译条目失败: $ZH_PO"; }
+	fi
+	printf '\n' >> "$ZH_PO"                       # 与上一条之间留空行，po 解析更稳
+	cat "${PATCH_DIR}/zh_Hans.po" >> "$ZH_PO" || die "无法追加翻译到 $ZH_PO"
+	has_text '以上全部' "$ZH_PO" || die "zh_Hans 翻译追加后校验失败（缺「以上全部」）"
+	sub "zh_Hans 翻译已追加（标记块，可重复执行）"
 else
 	warn "$ZH_PO 不存在，跳过中文翻译（不影响功能）"
 fi
@@ -104,9 +125,11 @@ miss=0
 for f in "$HACK/984-add-sonic-fullcone-support.patch" \
          "$HACK/985-add-sonic-fullcone-to-ipt.patch" \
          "$HACK/986-add-sonic-fullcone-to-nft.patch" \
+         "$HACK/987-sonic-fullcone-fix-races-and-drops.patch" \
          package/network/utils/iptables/patches/901-sonic-fullcone.patch \
          package/libs/libnftnl/patches/001-fullcone-expression.patch \
          package/network/utils/nftables/patches/002-fullcone-expression.patch \
+         package/network/utils/nftables/patches/003-fullcone-json-parser.patch \
          package/network/config/firewall4/patches/001-sonic-fullcone.patch \
          "$LUCI_FW/patches/001-add-fullcone-options.patch"; do
 	[ -s "$f" ] || { printf '  ✗ 缺失或为空: %s\n' "$f" >&2; miss=1; }
@@ -114,7 +137,7 @@ done
 has_line '^PKG_FIXUP:=.*autoreconf' "$NFTNL_MK" || { echo "  ✗ libnftnl 缺 PKG_FIXUP" >&2; miss=1; }
 [ "$miss" -eq 0 ] || die "有补丁未落到预期位置"
 
-step "fullcone 补丁就位（9 个补丁 + libnftnl PKG_FIXUP + zh_Hans 翻译）"
+step "fullcone 补丁就位（11 个补丁 + libnftnl PKG_FIXUP + zh_Hans 翻译）"
 sub "编译期由 OpenWrt 应用；补丁打不上会直接报错，不会静默跳过。"
 sub "刷机后启用（defaults.fullcone 是总开关，关着时 zone 里的设置无效）："
 cat <<'EOT'

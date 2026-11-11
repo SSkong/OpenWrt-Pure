@@ -121,15 +121,15 @@ qm set 100 --scsi0 local-zfs:vm-100-disk-0,discard=on,ssd=1 --boot order=scsi0
 
 ### 全锥形 NAT（SONiC fullcone）
 
-官方 25.12 已移除 `kmod-nft-fullcone`，所以 `base.config` 里没有它。全锥形改由 `scripts/patch-fullcone.sh` 打 9 个补丁实现（`patches/fullcone/`）：
+官方 25.12 已移除 `kmod-nft-fullcone`，所以 `base.config` 里没有它。全锥形改由 `scripts/patch-fullcone.sh` 打 11 个补丁实现（`patches/fullcone/`，取自 [mufeng05/openwrt-sonic-fullcone](https://github.com/mufeng05/openwrt-sonic-fullcone)）：
 
 | 层 | 补丁 | 落到哪 |
 |---|---|---|
-| 内核 | 984 / 985 / 986 | `target/linux/generic/hack-6.12/` |
+| 内核 | 984 / 985 / 986 / 987 | `target/linux/generic/hack-6.12/` |
 | iptables | 901 | `package/network/utils/iptables/patches/` |
 | libnftnl | 001 | `package/libs/libnftnl/patches/` |
-| nftables | 002 | `package/network/utils/nftables/patches/` |
-| fw4 / fw3 | 001 各一个 | `package/network/config/firewall4|firewall/patches/` |
+| nftables | 002 / 003 | `package/network/utils/nftables/patches/` |
+| fw4 / fw3 | 001 各一个 | `package/network/config/firewall4\|firewall/patches/` |
 | LuCI | 001 | `feeds/luci/applications/luci-app-firewall/patches/` |
 
 要点：
@@ -137,6 +137,7 @@ qm set 100 --scsi0 local-zfs:vm-100-disk-0,discard=on,ssd=1 --boot order=scsi0
 - **不产生新内核模块、不需要任何 `CONFIG_*`**。fullcone 表达式直接编进 `nf_nat` / `xt_MASQUERADE` / `nft_masq`，固件里不用装额外 kmod，也不存在「编了但没加载」
 - **必须晚于 `feeds install`**（LuCI 补丁要落到 feeds 目录下）；**必须早于 `make download`**（`libnftnl` 补丁改了 `src/Makefile.am`，脚本同时注入 `PKG_FIXUP:=autoreconf`，否则 automake 版本对不上会报 `automake-1.17: not found`）
 - 与旧 `nft-fullcone` 的区别：映射存在 conntrack 自身（第二张 3-tuple 哈希表，RCU 读路径），支持全部 L4 协议，per-rule 标志位——不走 fullcone 的流量零额外开销
+- **987 与 003 不在 SONiC 原补丁里**：987 修 `nf_nat_by_manip_src` 的哈希桶锁竞争与外部主动连入时的误丢包，003 修 `nft -j`（JSON 输入）与 `nft -o`（优化器）遇到 fullcone 规则时的崩溃
 - 启用要两步：`defaults.fullcone` 是总开关（默认关，关着时 zone 里的设置无效），再给 wan zone 单独开
 
 刷机后：
