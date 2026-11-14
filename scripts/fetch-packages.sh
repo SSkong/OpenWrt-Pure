@@ -74,7 +74,14 @@ clone_all() {
 	clone_pkg bandix              timsaya/openwrt-bandix             main     # PKG_NAME=bandix
 	clone_pkg luci-app-bandix     timsaya/luci-app-bandix            main
 	clone_pkg easytier            EasyTier/luci-app-easytier         main     # easytier + easytier-noweb + luci-app-easytier
-	clone_pkg honk                189160/luci-app-honk               main     # honk + luci-app-honk
+	# honk 换用 kenzok8/openwrt-honk（monorepo：honk/ 内核 + luci-app-honk/ 前端）。
+	# 与本项目其它包不同，它的内核不再从源码编译：Makefile 按 ARCH_PACKAGES 选
+	# honk-core-<CORE_COMMIT>-{x86_64,aarch64,armv7}.tar.gz，从上游 Release 的
+	# 不可变 tag（source-<run_id>）下载并硬校验 sha256。所以构建期不需要 golang，
+	# 但必须能访问 github.com 的 release 资产——上游一旦删 tag，下载就会失败。
+	# 三个设备分别命中 x86_64 / aarch64（bpi-r4、h68k 都是 aarch64*），已逐个核对
+	# 资产存在且 hash 与 Makefile 一致。
+	clone_pkg honk                kenzok8/openwrt-honk               main     # honk + luci-app-honk
 	clone_pkg zerotier-luci       rabbitrogi/luci-app-zerotier       main     # 核心 zerotier 用官方 feeds
 
 	# ---------- 媒体 / 推送 / DNS 工具 ----------

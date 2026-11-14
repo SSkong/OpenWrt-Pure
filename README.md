@@ -162,7 +162,7 @@ nft list ruleset | grep fullcone        # 规则是否生成
 |---|---|---|
 | NAT / P2P / 端口转发 | `luci-app-natmapt`、`stuntman-client` | `muink/openwrt-natmapt`、`muink/openwrt-stuntman` |
 | DNS | `luci-app-mosdns`、`luci-app-oxidns`、`luci-app-adguardhome-tk` | `sbwml/luci-app-mosdns`(v5)、`hahaher123/luci-app-oxidns`、`w9315273/luci-app-adguardhome` |
-| 穿透 / 带宽 / 组网 | `luci-app-bandix`、`luci-app-easytier`、`luci-app-honk`、`luci-app-zerotier` | `timsaya/*`、`EasyTier/luci-app-easytier`、`189160/luci-app-honk`、`rabbitrogi/luci-app-zerotier` |
+| 穿透 / 带宽 / 组网 | `luci-app-bandix`、`luci-app-easytier`、`luci-app-honk`、`luci-app-zerotier` | `timsaya/*`、`EasyTier/luci-app-easytier`、`kenzok8/openwrt-honk`、`rabbitrogi/luci-app-zerotier` |
 | 媒体 / 推送 | `luci-app-unblockneteasemusic`、`luci-app-wechatpush`、`luci-app-airconnect` | `UnblockNeteaseMusic/...`(js)、`tty228/luci-app-wechatpush`、`sbwml/luci-app-airconnect` |
 | 任务 / 定时 / 运维 | `luci-app-taskplan`、`luci-app-tasks`、`luci-app-partexp`、`luci-app-netspeedtest`、`luci-app-online-upgrade`、`luci-app-substore` | `sirpdboy/*`、`Arthur97172/*` |
 | 容器 / 磁盘 / 文件 / 网盘 | `luci-app-dockox`、`luci-app-diskbox`、`luci-app-harbor-file-pro`、`luci-app-openlist2`、`luci-app-wolmon`、`luci-app-oaf` | `permails/*`、`whzhni1/...`、`sbwml/luci-app-openlist2`、`my1639963/...`、`destan19/OpenAppFilter` |
